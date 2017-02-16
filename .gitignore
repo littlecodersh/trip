@@ -1,0 +1,8 @@
+build/*
+dist/*
+test/*
+trip.egg-info/*
+*.pyc
+*.swp
+test.py
+.DS_Store
