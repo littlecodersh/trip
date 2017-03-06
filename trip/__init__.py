@@ -5,3 +5,4 @@ __license__ = 'Apache 2.0'
 __copyright__ = 'Copyright 2017 LittleCoder'
 
 from .api import request, get, post
+from .sessions import session, Session

@@ -13,11 +13,13 @@ here = path.abspath(path.dirname(__file__))
 with open(path.join(here, 'README.rst'), encoding='utf-8') as f:
     long_description = f.read()
 
+with open(os.path.join(here, 'trip', '__version__.py'), 'r', 'utf-8') as f:
+    exec(f.read(), about)
+
 setup(
     name='trip',
 
-    version=trip.__version__,
-
+    version=about['__version__'],
     description='',
     long_description=long_description,
 
