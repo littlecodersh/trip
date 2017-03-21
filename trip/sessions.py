@@ -1,56 +1,138 @@
+from functools import partial
+
 import requests
+from requests.compat import cookielib
+from requests.cookies import (
+    cookiejar_from_dict, merge_cookies, RequestsCookieJar,
+    extract_cookies_to_jar, MockRequest, MockResponse)
+from requests.models import PreparedRequest, Request, Response
+from requests.sessions import merge_setting
+from requests.structures import CaseInsensitiveDict
+from requests.utils import get_encoding_from_headers
+from urllib3._collections import HTTPHeaderDict
 import tornado
 from tornado import gen
-from tornado.httpclient import AsyncHTTPClient, HTTPRequest
+from tornado.httpclient import AsyncHTTPClient, HTTPRequest, HTTPResponse
 from tornado.concurrent import Future
 
+from .utils import default_headers
+
 class Session(object):
+
     def __init__(self):
-        self.cookies = requests.cookies.cookiejar_from_dict({})
-    def request(self, method, url, params=None,
-            data=None, headers=None, cookies=None, files=None):
-        resultFuture = Future()
-        preparedRequest = requests.models.PreparedRequest()
-        preparedRequest.prepare(
+        self.client = AsyncHTTPClient()
+        self.cookies = cookiejar_from_dict({})
+        self.headers = default_headers()
+        self.params = {}
+
+    def prepare_request(self, request):
+        cookies = request.cookies or {}
+
+        # Bootstrap CookieJar.
+        if not isinstance(cookies, cookielib.CookieJar):
+            cookies = cookiejar_from_dict(cookies)
+
+        # Merge with session cookies
+        merged_cookies = merge_cookies(
+            merge_cookies(RequestsCookieJar(), self.cookies), cookies)
+
+        # Set environment's basic authentication if not explicitly set.
+        # auth = request.auth
+        # if self.trust_env and not auth and not self.auth:
+        #     auth = get_netrc_auth(request.url)
+
+        p = PreparedRequest()
+        p.prepare(
+            method=request.method.upper(),
+            url=request.url,
+            files=request.files,
+            data=request.data,
+            json=request.json,
+            headers=merge_setting(request.headers, self.headers, dict_class=CaseInsensitiveDict),
+            params=merge_setting(request.params, self.params),
+            # auth=merge_setting(auth, self.auth),
+            cookies=merged_cookies,
+            # hooks=merge_hooks(request.hooks, self.hooks),
+        )
+        tornadoRequest = HTTPRequest(
+            method=p.method,
+            url=p.url,
+            body=p.body,
+            headers=p.headers,
+            decompress_response=False,
+        )
+        return p, tornadoRequest
+
+    def prepare_response(self, future, request, raw):
+        response = Response()
+        response.status_code = getattr(raw, 'code', None)
+        response.headers = CaseInsensitiveDict(getattr(raw, 'headers', {}))
+        response.encoding = get_encoding_from_headers(response.headers)
+        response.raw = raw.buffer
+        response.reason = raw.reason
+        if isinstance(raw.effective_url, bytes):
+            response.url = raw.effective_url.decode('utf-8')
+        else:
+            response.url = raw.effective_url
+
+        headerDict = HTTPHeaderDict(response.headers)
+        response.cookies.extract_cookies(
+            MockResponse(headerDict), MockRequest(request))
+        self.cookies.extract_cookies(
+            MockResponse(headerDict), MockRequest(request))
+
+        response.request = request
+        # response.connection = self
+
+        future.set_result(response)
+
+    def request(self, method, url,
+            params=None, data=None, headers=None, cookies=None, files=None,
+            auth=None, timeout=None, allow_redirects=True, proxies=None,
+            hooks=None, stream=None, verify=None, cert=None, json=None):
+        req = requests.models.Request(
             method=method.upper(),
             url=url,
             headers=headers,
             files=files,
             data=data or {},
+            json=json,
             params=params or {},
-            cookies=requests.cookies.merge_cookies(
-                requests.cookies.merge_cookies(
-                requests.cookies.RequestsCookieJar(), self.cookies),
-                cookies or {}) )
-        tornadoRequest = HTTPRequest(
-            method=preparedRequest.method,
-            url=preparedRequest.url,
-            body=preparedRequest.body,
-            headers=preparedRequest.headers,)
-        client = AsyncHTTPClient()
-        def setResult(response):
-            client.close()
-            r = self.build_response(response)
-            requests.cookies.extract_cookies_to_jar(
-                self.cookies, preparedRequest, r.raw)
-            resultFuture.set_result(r)
-        client.fetch(tornadoRequest, setResult)
-        return resultFuture
+            auth=auth,
+            cookies=cookies,
+            hooks=hooks,
+        )
+        rRequest, tRequest = self.prepare_request(req)
+
+        # proxies = proxies or {}
+        # 
+        # settings = self.merge_environment_settings(
+        #     prep.url, proxies, stream, verify, cert
+        # )
+        # 
+        # # Send the request.
+        # send_kwargs = {
+        #     'timeout': timeout,
+        #     'allow_redirects': allow_redirects,
+        # }
+        send_kwargs = {}
+        # send_kwargs.update(settings)
+        resp = self.send(rRequest, tRequest, **send_kwargs)
+
+        return resp
+
+    def send(self, rRequest, tRequest, **kwargs):
+        r = Future()
+        self.client.fetch(tRequest,
+            partial(self.prepare_response, r, rRequest))
+        return r
+
     def get(self, url, params=None, headers=None):
         return self.request('GET', url, params, headers=headers)
+
     def post(self, url, params=None,
             data=None, headers=None, files=None):
         return self.request('POST', url, data=data,
             headers=headers, files=files)
-    def build_response(self, raw):
-        response = requests.models.Response()
-        response.status_code = getattr(raw, 'code', None)
-        response.headers = getattr(raw, 'headers', {})
-        response.encoding = requests.utils.get_encoding_from_headers(response.headers)
-        response.raw = raw.buffer
-        if isinstance(raw.effective_url, bytes):
-            response.url = raw.effective_url.decode('utf-8')
-        else:
-            response.url = raw.effective_url
-        response.request = raw
-        return response
+
+session = Session
