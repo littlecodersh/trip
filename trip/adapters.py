@@ -1,5 +1,8 @@
+from socket import AF_INET, AF_UNSPEC
+
+from tornado import gen
 from tornado.tcpclient import TCPClient
-from tornado.netutil import Resolver
+from tornado.netutil import Resolver, OverrideResolver
 from tornado.httputil import RequestStartLine
 
 from requests.adapters import BaseAdapter
@@ -20,17 +23,27 @@ class HTTPAdapter(BaseAdapter):
         connections and connection timeouts, never to requests where data has
         made it to the server. By default, Requests does not retry failed
         connections.
+        #TODO: If you need granular control over the conditions under
+        which we retry a request, import urllib3's ``Retry`` class and pass
+        that instead.
 
     Usage::
 
       >>> import trip
       >>> s = trip.Session()
-      >>> a = trip.adapters.HTTPAdapter(max_retries=3)
+      >>> a = trip.adapters.HTTPAdapter(hostname_mapping='/etc/hosts')
       >>> s.mount('http://', a)
     """
-    def __init__(self, io_loop=None):
+    def __init__(self, io_loop=None, hostname_mapping=None, 
+            max_buffer_size=None):
         super(HTTPAdapter, self).__init__()
-        self.tcp_client = TCPClient(resolver=Resolver(io_loop=io_loop), io_loop=io_loop)
+        self.resolver = Resolver()
+        if hostname_mapping is not None:
+            self.resolver = OverrideResolver(resolver=self.resolver,
+                mapping=hostname_mapping)
+        self.tcp_client = TCPClient(resolver=self.resolver)
+
+    @gen.coroutine
     def send(self, request, stream=False, timeout=None, verify=True,
              cert=None, proxies=None):
         """Sends PreparedRequest object. Returns Response object.
@@ -46,10 +59,15 @@ class HTTPAdapter(BaseAdapter):
         :param proxies: (optional) The proxies dictionary to apply to the request.
         :rtype: requests.Response
         """
-        pass
+        steam = yield self.tcp_client.connect(host, port, af=af,
+                                    ssl_options=ssl_options,
+                                    max_buffer_size=self.max_buffer_size,
+                                    callback=self._on_connect)
+
     def close(self):
         """Cleans up adapter specific items."""
         pass
+
 
 class _Connection(object):
     def __init__(self, prepared_request, io_loop, final_callback, tcp_client):
