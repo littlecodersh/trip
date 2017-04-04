@@ -11,7 +11,3 @@ class TripException(RequestException, HTTPError):
     def __init__(self, *args, **kwargs):
         """Initialize TripException with `request` and `response` objects."""
         RequestException.__init__(*args, **kwargs)
-
-
-class ParamsError(TripException):
-    """A params error occurred."""

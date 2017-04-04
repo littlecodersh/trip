@@ -1,14 +1,17 @@
 from socket import AF_INET, AF_UNSPEC
 
 from tornado import gen
-from tornado.tcpclient import TCPClient
+from tornado.concurrent import TracebackFuture
+from tornado.http1connection import (
+    HTTP1Connection, HTTP1ConnectionParameters)
+from tornado.httputil import (
+    RequestStartLine, HTTPMessageDelegate)
+from tornado.ioloop import IOLoop
 from tornado.netutil import Resolver, OverrideResolver
-from tornado.httputil import RequestStartLine
+from tornado.tcpclient import TCPClient
 
 from requests.adapters import BaseAdapter
 from requests.models import PreparedRequest
-
-pr = PreparedRequest()
 
 class HTTPAdapter(BaseAdapter):
     """The built-in HTTP Adapter for BaseIOStream.
@@ -35,20 +38,28 @@ class HTTPAdapter(BaseAdapter):
       >>> s.mount('http://', a)
     """
     def __init__(self, io_loop=None, hostname_mapping=None, 
-            max_buffer_size=None):
+            max_buffer_size=None, max_header_size=None,
+            max_body_size=None):
         super(HTTPAdapter, self).__init__()
+
+        self.max_buffer_size = max_buffer_size
+        self.max_header_size = max_header_size
+        self.max_body_size = max_body_size
+        self.io_loop = io_loop or IOLoop.current()
+
         self.resolver = Resolver()
         if hostname_mapping is not None:
             self.resolver = OverrideResolver(resolver=self.resolver,
                 mapping=hostname_mapping)
+
         self.tcp_client = TCPClient(resolver=self.resolver)
 
     @gen.coroutine
     def send(self, request, stream=False, timeout=None, verify=True,
              cert=None, proxies=None):
-        """Sends PreparedRequest object. Returns Response object.
+        """Sends Request object. Returns Response object.
 
-        :param request: The :class:`PreparedRequest <PreparedRequest>` being sent.
+        :param request: The :class:`Request <Request>` being sent.
         :param stream: (optional) Whether to stream the request content.
         :param timeout: (optional) How long to wait for the server to send
             data before giving up, as a float, or a :ref:`(connect timeout,
@@ -57,33 +68,90 @@ class HTTPAdapter(BaseAdapter):
         :param verify: (optional) Whether to verify SSL certificates.
         :param cert: (optional) Any user-provided SSL certificate to be trusted.
         :param proxies: (optional) The proxies dictionary to apply to the request.
-        :rtype: requests.Response
+        :rtype: trip.models.Response
         """
-        steam = yield self.tcp_client.connect(host, port, af=af,
-                                    ssl_options=ssl_options,
-                                    max_buffer_size=self.max_buffer_size,
-                                    callback=self._on_connect)
+        steam = yield self.tcp_client.connect(
+            request.host, request.port,
+            af=request.af,
+            ssl_options=request.ssl_options,
+            max_buffer_size=self.max_buffer_size)
+        steam.set_nodelay(True)
+
+        connection = HTTP1Connection(
+            stream, True,
+            HTTP1ConnectionParameters(
+                no_keep_alive=True,
+                max_header_size=self.max_header_size,
+                max_body_size=self.max_body_size,
+                decompress=self.decompress))
+
+        connection.write_headers(request.start_line, request.headers)
+        if request.body is not None:
+            connection.write(request.body)
+        connection.finish()
+
+        future = TracebackFuture()
+        def handle_response(response):
+            # if raise_error and response.error:
+            #     future.set_exception(response.error)
+            # else:
+            #     future.set_result(response)
+            future.set_result(response)
+        connection.read_response(MessageDelegate(handle_response))
+
+        return future
+        
 
     def close(self):
         """Cleans up adapter specific items."""
         pass
 
 
-class _Connection(object):
-    def __init__(self, prepared_request, io_loop, final_callback, tcp_client):
-        self.request = prepared_request
-        self.io_loop = io_loop
+class MessageDelegate(HTTPMessageDelegate):
+    """ Message delegate.
+    """
+    def __init__(self, final_callback):
+        self.code = None
+        self.reason = None
+        self.headers = None
+        self.chunks = []
         self.final_callback = final_callback
-        self.tcp_client = tcp_client
+        self.io_loop = IOLoop.current()
 
-        port = 443 if self.request.url.startswith('https') else 80
-        af = socket.AF_INET
-        # if request.allow_ipv6 is False:
-        #     af = socket.AF_INET
-        # else:
-        #     af = socket.AF_UNSPEC
+    def headers_received(self, start_line, headers):
+        """Called when the HTTP headers have been received and parsed.
 
-        self.tcp_client.connect(self.request.url, port, af=af,
-            callback=self._on_connect)
-    def _on_connect(self, stream):
+        :arg start_line: a `.RequestStartLine` or `.ResponseStartLine`
+            depending on whether this is a client or server message.
+        :arg headers: a `.HTTPHeaders` instance.
+
+        Some `.HTTPConnection` methods can only be called during
+        ``headers_received``.
+
+        May return a `.Future`; if it does the body will not be read
+        until it is done.
+        """
+        self.code = first_line.code
+        self.reason = first_line.reason
+        self.headers = headers
+        print('MessageDelegate called: %s, %s' % (start_line, headers))
+
+    def data_received(self, chunk):
+        """Called when a chunk of data has been received.
+
+        May return a `.Future` for flow control.
+        """
+        self.chunks.append(chunk)
+
+    def finish(self):
+        """Called after the last chunk of data has been received."""
+        data = b''.join(self.chunks)
+        self.io_loop.add_callback(self.final_callback, data)
+
+    def on_connection_close(self):
+        """Called if the connection is closed without finishing the request.
+
+        If ``headers_received`` is called, either ``finish`` or
+        ``on_connection_close`` will be called, but not both.
+        """
         pass

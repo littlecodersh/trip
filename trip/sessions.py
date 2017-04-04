@@ -5,22 +5,31 @@ from requests.compat import cookielib
 from requests.cookies import (
     cookiejar_from_dict, merge_cookies, RequestsCookieJar,
     extract_cookies_to_jar, MockRequest, MockResponse)
-from requests.models import PreparedRequest, Request, Response
+from requests.models import (
+    PreparedRequest as RPreparedRequest,
+    Request as RRequest,
+    Response as RResponse)
 from requests.sessions import merge_setting
 from requests.structures import CaseInsensitiveDict
 from requests.utils import get_encoding_from_headers
 from urllib3._collections import HTTPHeaderDict
+
 import tornado
 from tornado import gen
-from tornado.httpclient import AsyncHTTPClient, HTTPRequest, HTTPResponse
+from tornado.httpclient import (
+    AsyncHTTPClient,
+    HTTPRequest as TRequest,
+    HTTPResponse as TResponse)
 from tornado.concurrent import Future
 
+from .adapters import HTTPAdapter
+from .models import Request
 from .utils import default_headers
 
 class Session(object):
 
     def __init__(self):
-        self.client = AsyncHTTPClient()
+        self.adapter = HTTPAdapter()
         self.cookies = cookiejar_from_dict({})
         self.headers = default_headers()
         self.params = {}
@@ -41,27 +50,22 @@ class Session(object):
         # if self.trust_env and not auth and not self.auth:
         #     auth = get_netrc_auth(request.url)
 
-        p = PreparedRequest()
+        p = RPreparedRequest()
         p.prepare(
             method=request.method.upper(),
             url=request.url,
             files=request.files,
             data=request.data,
             json=request.json,
-            headers=merge_setting(request.headers, self.headers, dict_class=CaseInsensitiveDict),
+            headers=merge_setting(request.headers,
+                self.headers, dict_class=CaseInsensitiveDict),
             params=merge_setting(request.params, self.params),
             # auth=merge_setting(auth, self.auth),
             cookies=merged_cookies,
             # hooks=merge_hooks(request.hooks, self.hooks),
         )
-        tornadoRequest = HTTPRequest(
-            method=p.method,
-            url=p.url,
-            body=p.body,
-            headers=p.headers,
-            decompress_response=False,
-        )
-        return p, tornadoRequest
+        request = Request(rRequest=p)
+        return request
 
     def prepare_response(self, future, request, raw):
         response = Response()
@@ -90,7 +94,7 @@ class Session(object):
             params=None, data=None, headers=None, cookies=None, files=None,
             auth=None, timeout=None, allow_redirects=True, proxies=None,
             hooks=None, stream=None, verify=None, cert=None, json=None):
-        req = requests.models.Request(
+        req = RRequest(
             method=method.upper(),
             url=url,
             headers=headers,
@@ -102,7 +106,7 @@ class Session(object):
             cookies=cookies,
             hooks=hooks,
         )
-        rRequest, tRequest = self.prepare_request(req)
+        request = self.prepare_request(req)
 
         # proxies = proxies or {}
         # 
@@ -117,15 +121,9 @@ class Session(object):
         # }
         send_kwargs = {}
         # send_kwargs.update(settings)
-        resp = self.send(rRequest, tRequest, **send_kwargs)
+        resp = self.adapter.send(request, **send_kwargs)
 
         return resp
-
-    def send(self, rRequest, tRequest, **kwargs):
-        r = Future()
-        self.client.fetch(tRequest,
-            partial(self.prepare_response, r, rRequest))
-        return r
 
     def get(self, url, params=None, headers=None):
         return self.request('GET', url, params, headers=headers)
