@@ -7,7 +7,6 @@ from tornado.httpclient import HTTPRequest
 from tornado.httputil import (split_host_and_port,
     RequestStartLine, HTTPHeaders)
 
-from .exceptions import ParamsError
 
 class Request(object):
     """A user-created :class:`Request <Request>` object.
@@ -34,7 +33,7 @@ class Request(object):
         self.headers = None
         self.body = None
 
-        if bool(rRequest) != bool(tRequest): # xor
+        if bool(rRequest) == bool(tRequest): # xor
             raise ValueError('Either rRequest or tRequest should be provided.')
         elif rRequest is not None:
             self._init_with_r_request(rRequest)
@@ -42,8 +41,8 @@ class Request(object):
             self._init_with_t_request(tRequest)
 
     def _init_with_r_request(self, request):
-        if not isinstance(rRequest, PreparedRequest):
-            raise ParamsError('param rRequest should be \
+        if not isinstance(request, PreparedRequest):
+            raise ValueError('param rRequest should be \
                 PreparedRequest from requests package.')
         parsed = urlsplit(request.url)
         if parsed.scheme not in ('http', 'https'):
@@ -62,11 +61,15 @@ class Request(object):
             (('?' + parsed.query) if parsed.query else ''))
         self.start_line = RequestStartLine(request.method, req_path, '')
         self.headers = HTTPHeaders(request.headers)
+        if 'Connection' not in self.headers:
+            self.headers['Connection'] = 'close'
+        if 'Host' not in self.headers:
+            self.headers['Host'] = self.host
         self.body = request.body
 
     def _init_with_t_request(self, request):
-        if isinstance(tRequest, HTTPRequest):
-            raise ParamsError('param tRequest should be \
+        if isinstance(request, HTTPRequest):
+            raise ValueError('param tRequest should be \
                 HTTPRequest instance from tornado package.')
 
         # from tornado.simple_httpclient L214-L242

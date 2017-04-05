@@ -26,6 +26,7 @@ from .adapters import HTTPAdapter
 from .models import Request
 from .utils import default_headers
 
+
 class Session(object):
 
     def __init__(self):
@@ -132,5 +133,6 @@ class Session(object):
             data=None, headers=None, files=None):
         return self.request('POST', url, data=data,
             headers=headers, files=files)
+
 
 session = Session

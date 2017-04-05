@@ -13,6 +13,7 @@ from tornado.tcpclient import TCPClient
 from requests.adapters import BaseAdapter
 from requests.models import PreparedRequest
 
+
 class HTTPAdapter(BaseAdapter):
     """The built-in HTTP Adapter for BaseIOStream.
 
@@ -38,7 +39,7 @@ class HTTPAdapter(BaseAdapter):
       >>> s.mount('http://', a)
     """
     def __init__(self, io_loop=None, hostname_mapping=None, 
-            max_buffer_size=None, max_header_size=None,
+            max_buffer_size=104857600, max_header_size=None,
             max_body_size=None):
         super(HTTPAdapter, self).__init__()
 
@@ -70,20 +71,20 @@ class HTTPAdapter(BaseAdapter):
         :param proxies: (optional) The proxies dictionary to apply to the request.
         :rtype: trip.models.Response
         """
-        steam = yield self.tcp_client.connect(
+        s = yield self.tcp_client.connect(
             request.host, request.port,
             af=request.af,
             ssl_options=request.ssl_options,
             max_buffer_size=self.max_buffer_size)
-        steam.set_nodelay(True)
+        s.set_nodelay(True)
 
         connection = HTTP1Connection(
-            stream, True,
+            s, True,
             HTTP1ConnectionParameters(
                 no_keep_alive=True,
                 max_header_size=self.max_header_size,
                 max_body_size=self.max_body_size,
-                decompress=self.decompress))
+                decompress=request.decompress))
 
         connection.write_headers(request.start_line, request.headers)
         if request.body is not None:
@@ -98,8 +99,9 @@ class HTTPAdapter(BaseAdapter):
             #     future.set_result(response)
             future.set_result(response)
         connection.read_response(MessageDelegate(handle_response))
+        r = yield future
 
-        return future
+        raise gen.Return(r)
         
 
     def close(self):
@@ -131,10 +133,9 @@ class MessageDelegate(HTTPMessageDelegate):
         May return a `.Future`; if it does the body will not be read
         until it is done.
         """
-        self.code = first_line.code
-        self.reason = first_line.reason
+        self.code = start_line.code
+        self.reason = start_line.reason
         self.headers = headers
-        print('MessageDelegate called: %s, %s' % (start_line, headers))
 
     def data_received(self, chunk):
         """Called when a chunk of data has been received.
