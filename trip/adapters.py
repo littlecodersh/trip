@@ -61,7 +61,7 @@ class HTTPAdapter(BaseAdapter):
              cert=None, proxies=None):
         """Sends Request object. Returns Response object.
 
-        :param request: The :class:`Request <Request>` being sent.
+        :param request: The :class:`PreparedRequest <PreparedRequest>` being sent.
         :param stream: (optional) Whether to stream the request content.
         :param timeout: (optional) How long to wait for the server to send
             data before giving up, as a float, or a :ref:`(connect timeout,

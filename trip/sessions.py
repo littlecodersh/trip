@@ -5,7 +5,7 @@ from requests.compat import cookielib
 from requests.cookies import (
     cookiejar_from_dict, merge_cookies, RequestsCookieJar,
     extract_cookies_to_jar, MockRequest, MockResponse)
-from requests.models import PreparedRequest, Request, Response
+from requests.models import Response
 from requests.sessions import merge_setting
 from requests.structures import CaseInsensitiveDict
 from requests.utils import get_encoding_from_headers
@@ -17,11 +17,28 @@ from tornado.httpclient import AsyncHTTPClient
 from tornado.concurrent import Future
 
 from .adapters import HTTPAdapter
-from .models import Request as _Request
+from .models import Request, PreparedRequest
 from .utils import default_headers
 
 
 class Session(object):
+    """A Trip session.
+
+    Provides cookie persistence, and configuration.
+
+    Basic Usage::
+
+      >>> import trip
+      >>> s = trip.Session()
+      >>> s.get('http://httpbin.org/get')
+      <Response [200]>
+
+    Or as a context manager::
+
+      >>> with requests.Session() as s:
+      >>>     s.get('http://httpbin.org/get')
+      <Response [200]>
+    """
 
     def __init__(self):
         self.adapter = HTTPAdapter()
@@ -59,8 +76,7 @@ class Session(object):
             cookies=merged_cookies,
             # hooks=merge_hooks(request.hooks, self.hooks),
         )
-        request = _Request(rRequest=p)
-        return request
+        return p
 
     def prepare_response(self, req, resp):
         """Builds a :class:`Response <requests.Response>` object from a tornado
@@ -74,6 +90,7 @@ class Session(object):
         object.
         :rtype: requests.Response
         """
+
         response = Response()
 
         # Fallback to None if there's no status_code, for whatever reason.
@@ -95,11 +112,11 @@ class Session(object):
         # Add new cookies from the server
         headerDict = HTTPHeaderDict(response.headers)
         response.cookies.extract_cookies(
-            MockResponse(headerDict), MockRequest(req.raw))
+            MockResponse(headerDict), MockRequest(req))
         self.cookies.extract_cookies(
-            MockResponse(headerDict), MockRequest(req.raw))
+            MockResponse(headerDict), MockRequest(req))
 
-        response.request = req.raw
+        response.request = req
         # response.connection = self
 
         return response
@@ -108,6 +125,7 @@ class Session(object):
             params=None, data=None, headers=None, cookies=None, files=None,
             auth=None, timeout=None, allow_redirects=True, proxies=None,
             hooks=None, stream=None, verify=None, cert=None, json=None):
+
         req = Request(
             method=method.upper(),
             url=url,
@@ -136,14 +154,7 @@ class Session(object):
         send_kwargs = {}
         # send_kwargs.update(settings)
 
-        future = Future()
-        def handle_future(f):
-            response = self.prepare_response(request, f.result())
-            future.set_result(response)
-        resp = self.adapter.send(request, **send_kwargs)
-        resp.add_done_callback(handle_future)
-
-        return future
+        return self.send(request, **send_kwargs)
 
     def get(self, url, params=None, headers=None):
         return self.request('GET', url, params, headers=headers)
@@ -152,6 +163,26 @@ class Session(object):
             data=None, headers=None, files=None):
         return self.request('POST', url, data=data,
             headers=headers, files=files)
+
+    def send(self, request, **kwargs):
+        """Send a given PreparedRequest.
+
+        :rtype: trip.gen.Future
+        """
+
+        if not isinstance(request, PreparedRequest):
+            raise ValueError('You can only send PreparedRequests.')
+
+        future = Future()
+
+        def handle_future(f):
+            response = self.prepare_response(request, f.result())
+            future.set_result(response)
+
+        resp = self.adapter.send(request, **kwargs)
+        resp.add_done_callback(handle_future)
+
+        return future
 
 
 session = Session
