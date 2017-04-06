@@ -11,7 +11,8 @@ from tornado.netutil import Resolver, OverrideResolver
 from tornado.tcpclient import TCPClient
 
 from requests.adapters import BaseAdapter
-from requests.models import PreparedRequest
+from requests.models import PreparedRequest, Response
+from requests.utils import get_encoding_from_headers
 
 
 class HTTPAdapter(BaseAdapter):
@@ -69,7 +70,7 @@ class HTTPAdapter(BaseAdapter):
         :param verify: (optional) Whether to verify SSL certificates.
         :param cert: (optional) Any user-provided SSL certificate to be trusted.
         :param proxies: (optional) The proxies dictionary to apply to the request.
-        :rtype: trip.models.Response
+        :rtype: trip.adapters.MessageDelegate
         """
         s = yield self.tcp_client.connect(
             request.host, request.port,
@@ -98,15 +99,16 @@ class HTTPAdapter(BaseAdapter):
             # else:
             #     future.set_result(response)
             future.set_result(response)
-        connection.read_response(MessageDelegate(handle_response))
-        r = yield future
+        resp = MessageDelegate(handle_response)
+        connection.read_response(resp)
+        yield future # body is automatically set in resp
 
-        raise gen.Return(r)
-        
+        raise gen.Return(resp)
 
     def close(self):
         """Cleans up adapter specific items."""
         pass
+
 
 
 class MessageDelegate(HTTPMessageDelegate):
@@ -116,6 +118,7 @@ class MessageDelegate(HTTPMessageDelegate):
         self.code = None
         self.reason = None
         self.headers = None
+        self.data = None
         self.chunks = []
         self.final_callback = final_callback
         self.io_loop = IOLoop.current()
@@ -147,6 +150,7 @@ class MessageDelegate(HTTPMessageDelegate):
     def finish(self):
         """Called after the last chunk of data has been received."""
         data = b''.join(self.chunks)
+        self.body = data
         self.io_loop.add_callback(self.final_callback, data)
 
     def on_connection_close(self):

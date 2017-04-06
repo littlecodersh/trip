@@ -22,9 +22,8 @@ class Request(object):
     """
 
     def __init__(self, rRequest=None, tRequest=None):
-        """
-        host, port
-        """
+        self.raw = rRequest
+        self.url = None
         self.host = None
         self.port = None
         self.ssl_options = None
@@ -44,6 +43,7 @@ class Request(object):
         if not isinstance(request, PreparedRequest):
             raise ValueError('param rRequest should be \
                 PreparedRequest from requests package.')
+        self.url = request.url
         parsed = urlsplit(request.url)
         if parsed.scheme not in ('http', 'https'):
             raise ValueError('Unsupported url scheme: %s' % request.url)

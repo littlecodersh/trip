@@ -5,10 +5,7 @@ from requests.compat import cookielib
 from requests.cookies import (
     cookiejar_from_dict, merge_cookies, RequestsCookieJar,
     extract_cookies_to_jar, MockRequest, MockResponse)
-from requests.models import (
-    PreparedRequest as RPreparedRequest,
-    Request as RRequest,
-    Response as RResponse)
+from requests.models import PreparedRequest, Request, Response
 from requests.sessions import merge_setting
 from requests.structures import CaseInsensitiveDict
 from requests.utils import get_encoding_from_headers
@@ -16,14 +13,11 @@ from urllib3._collections import HTTPHeaderDict
 
 import tornado
 from tornado import gen
-from tornado.httpclient import (
-    AsyncHTTPClient,
-    HTTPRequest as TRequest,
-    HTTPResponse as TResponse)
+from tornado.httpclient import AsyncHTTPClient
 from tornado.concurrent import Future
 
 from .adapters import HTTPAdapter
-from .models import Request
+from .models import Request as _Request
 from .utils import default_headers
 
 
@@ -51,7 +45,7 @@ class Session(object):
         # if self.trust_env and not auth and not self.auth:
         #     auth = get_netrc_auth(request.url)
 
-        p = RPreparedRequest()
+        p = PreparedRequest()
         p.prepare(
             method=request.method.upper(),
             url=request.url,
@@ -65,37 +59,56 @@ class Session(object):
             cookies=merged_cookies,
             # hooks=merge_hooks(request.hooks, self.hooks),
         )
-        request = Request(rRequest=p)
+        request = _Request(rRequest=p)
         return request
 
-    def prepare_response(self, future, request, raw):
-        response = Response()
-        response.status_code = getattr(raw, 'code', None)
-        response.headers = CaseInsensitiveDict(getattr(raw, 'headers', {}))
-        response.encoding = get_encoding_from_headers(response.headers)
-        response.raw = raw.buffer
-        response.reason = raw.reason
-        if isinstance(raw.effective_url, bytes):
-            response.url = raw.effective_url.decode('utf-8')
-        else:
-            response.url = raw.effective_url
+    def prepare_response(self, req, resp):
+        """Builds a :class:`Response <requests.Response>` object from a tornado
+        response. This should not be called from user code, and is only exposed
+        for use when subclassing the
+        :class:`HTTPAdapter <trip.adapters.HTTPAdapter>`
 
+        :param req: The :class:`PreparedRequest <PreparedRequest>` used to
+        generate the response.
+        :param resp: The :class:`MessageDelegate <MessageDelegate>` response
+        object.
+        :rtype: requests.Response
+        """
+        response = Response()
+
+        # Fallback to None if there's no status_code, for whatever reason.
+        response.status_code = getattr(resp, 'code', None)
+
+        # Make headers case-insensitive.
+        response.headers = CaseInsensitiveDict(getattr(resp, 'headers', {}))
+
+        # Set encoding.
+        response.encoding = get_encoding_from_headers(response.headers)
+        response.raw = resp
+        response.reason = getattr(resp, 'reason', '')
+
+        if isinstance(req.url, bytes):
+            response.url = req.url.decode('utf-8')
+        else:
+            response.url = req.url
+
+        # Add new cookies from the server
         headerDict = HTTPHeaderDict(response.headers)
         response.cookies.extract_cookies(
-            MockResponse(headerDict), MockRequest(request))
+            MockResponse(headerDict), MockRequest(req.raw))
         self.cookies.extract_cookies(
-            MockResponse(headerDict), MockRequest(request))
+            MockResponse(headerDict), MockRequest(req.raw))
 
-        response.request = request
+        response.request = req.raw
         # response.connection = self
 
-        future.set_result(response)
+        return response
 
     def request(self, method, url,
             params=None, data=None, headers=None, cookies=None, files=None,
             auth=None, timeout=None, allow_redirects=True, proxies=None,
             hooks=None, stream=None, verify=None, cert=None, json=None):
-        req = RRequest(
+        req = Request(
             method=method.upper(),
             url=url,
             headers=headers,
@@ -122,9 +135,15 @@ class Session(object):
         # }
         send_kwargs = {}
         # send_kwargs.update(settings)
-        resp = self.adapter.send(request, **send_kwargs)
 
-        return resp
+        future = Future()
+        def handle_future(f):
+            response = self.prepare_response(request, f.result())
+            future.set_result(response)
+        resp = self.adapter.send(request, **send_kwargs)
+        resp.add_done_callback(handle_future)
+
+        return future
 
     def get(self, url, params=None, headers=None):
         return self.request('GET', url, params, headers=headers)
