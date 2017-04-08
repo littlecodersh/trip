@@ -1,8 +1,9 @@
 from socket import AF_INET, AF_UNSPEC
 
 from requests.models import (
+    PreparedRequest as _PreparedRequest,
     Request as _Request, 
-    PreparedRequest as _PreparedRequest)
+    Response as _Response)
 from requests.compat import urlparse, urlsplit
 
 from tornado.httpclient import HTTPRequest
@@ -180,5 +181,10 @@ class PreparedRequest(_PreparedRequest):
             self.headers['Host'] = self.host
 
 
-class Response(object):
-    pass
+class Response(_Response):
+    """The :class:`Response <Response>` object, which contains a
+    server's response to an HTTP request.
+    """
+    
+    def __init__(self):
+        _Response.__init__(self)

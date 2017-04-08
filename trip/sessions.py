@@ -5,7 +5,6 @@ from requests.compat import cookielib
 from requests.cookies import (
     cookiejar_from_dict, merge_cookies, RequestsCookieJar,
     extract_cookies_to_jar, MockRequest, MockResponse)
-from requests.models import Response
 from requests.sessions import merge_setting
 from requests.structures import CaseInsensitiveDict
 from requests.utils import get_encoding_from_headers
@@ -17,7 +16,7 @@ from tornado.httpclient import AsyncHTTPClient
 from tornado.concurrent import Future
 
 from .adapters import HTTPAdapter
-from .models import Request, PreparedRequest
+from .models import PreparedRequest, Request, Response
 from .utils import default_headers
 
 
@@ -33,7 +32,7 @@ class Session(object):
       >>> s.get('http://httpbin.org/get')
       <Response [200]>
 
-    Or as a context manager::
+    Or as a context manager:: #TODO
 
       >>> with requests.Session() as s:
       >>>     s.get('http://httpbin.org/get')

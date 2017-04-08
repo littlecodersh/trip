@@ -114,6 +114,7 @@ class HTTPAdapter(BaseAdapter):
 class MessageDelegate(HTTPMessageDelegate):
     """ Message delegate.
     """
+
     def __init__(self, final_callback):
         self.code = None
         self.reason = None
