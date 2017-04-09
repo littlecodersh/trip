@@ -110,7 +110,6 @@ class HTTPAdapter(BaseAdapter):
         pass
 
 
-
 class MessageDelegate(HTTPMessageDelegate):
     """ Message delegate.
     """

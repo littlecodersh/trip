@@ -78,7 +78,7 @@ class Session(object):
         return p
 
     def prepare_response(self, req, resp):
-        """Builds a :class:`Response <requests.Response>` object from a tornado
+        """Builds a :class:`Response <trip.Response>` object from a tornado
         response. This should not be called from user code, and is only exposed
         for use when subclassing the
         :class:`HTTPAdapter <trip.adapters.HTTPAdapter>`
