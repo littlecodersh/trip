@@ -3,7 +3,8 @@ from socket import AF_INET, AF_UNSPEC
 from requests.models import (
     PreparedRequest as _PreparedRequest,
     Request as _Request, 
-    Response as _Response)
+    Response as _Response,
+    ITER_CHUNK_SIZE)
 from requests.compat import urlparse, urlsplit
 
 from tornado.httpclient import HTTPRequest
@@ -143,6 +144,7 @@ class PreparedRequest(_PreparedRequest):
         self.start_line = None
         self.headers = None
         self.body = None
+        self.stream = False
 
     def prepare(self,
             method=None, url=None, headers=None, files=None, data=None,
