@@ -5,13 +5,13 @@ from tornado import gen
 from tornado.concurrent import TracebackFuture
 from tornado.http1connection import (
     HTTP1Connection, HTTP1ConnectionParameters,
-    _ExceptionLoggingContext)
+    _ExceptionLoggingContext, _GzipMessageDelegate)
 from tornado.httputil import (
     RequestStartLine, HTTPMessageDelegate,
     HTTPInputError, parse_response_start_line)
 from tornado.ioloop import IOLoop
 from tornado.iostream import StreamClosedError
-from tornado.log import app_log
+from tornado.log import app_log, gen_log
 from tornado.netutil import Resolver, OverrideResolver
 from tornado.tcpclient import TCPClient
 
@@ -85,8 +85,8 @@ class HTTPAdapter(BaseAdapter):
             max_buffer_size=self.max_buffer_size)
         s.set_nodelay(True)
 
-        connection = HTTP1Connection(
-            s, True,
+        connection = HTTPConnection(
+            s,
             HTTP1ConnectionParameters(
                 no_keep_alive=True,
                 max_header_size=self.max_header_size,
@@ -105,15 +105,20 @@ class HTTPAdapter(BaseAdapter):
             # else:
             #     future.set_result(response)
             future.set_result(response)
-        resp = MessageDelegate(request, handle_response)
-        connection.read_response(resp)
-        yield future # body is automatically set in resp
+        resp = MessageDelegate(request, connection, handle_response)
+
+        connection._read_message(resp)
+        yield future # header is automatically set in resp
+
+        if not request.stream:
+            yield connection.read_body(resp)
 
         raise gen.Return(resp)
 
     def close(self):
         """Cleans up adapter specific items."""
         pass
+
 
 class HTTPConnection(HTTP1Connection):
     """Implements the HTTP/1.x protocol.
@@ -122,10 +127,15 @@ class HTTPConnection(HTTP1Connection):
     def __init__(self, stream, params=None):
         HTTP1Connection.__init__(self, stream, True, params)
 
+    def _parse_delegate(self, delegate):
+        if self.params.decompress:
+            return delegate, _GzipMessageDelegate(delegate, self.params.chunk_size)
+        return delegate, delegate
+
     @gen.coroutine
     def _read_message(self, delegate):
-        need_delegate_close = False
         try:
+            _delegate, delegate = self._parse_delegate(delegate)
             header_future = self.stream.read_until_regex(
                 b"\r?\n\r?\n",
                 max_bytes=self.params.max_header_size)
@@ -147,26 +157,24 @@ class HTTPConnection(HTTP1Connection):
 
             self._disconnect_on_finish = not self._can_keep_alive(
                 start_line, headers)
-            need_delegate_close = True
             with _ExceptionLoggingContext(app_log):
                 header_future = delegate.headers_received(start_line, headers)
                 if header_future is not None:
                     yield header_future
             if self.stream is None:
                 # We've been detached.
-                need_delegate_close = False
+                _delegate.need_delegate_close = False
                 raise gen.Return(False)
-            skip_body = False
 
             if (self._request_start_line is not None and
                     self._request_start_line.method == 'HEAD'):
-                skip_body = True
+                _delegate.skip_body = True
             code = start_line.code
             if code == 304:
                 # 304 responses may include the content-length header
                 # but do not actually have a body.
                 # http://tools.ietf.org/html/rfc7230#section-3.3
-                skip_body = True
+                _delegate.skip_body = True
             if code >= 100 and code < 200:
                 # 1xx responses should never indicate the presence of
                 # a body.
@@ -177,10 +185,31 @@ class HTTPConnection(HTTP1Connection):
                 # TODO: client delegates will get headers_received twice
                 # in the case of a 100-continue.  Document or change?
                 yield self._read_message(delegate)
+            
+            # return the response with no body set
+            with _ExceptionLoggingContext(app_log):
+                delegate.finish()
 
-            if not skip_body:
+        except HTTPInputError as e:
+            gen_log.info("Malformed HTTP message from %s: %s",
+                         self.context, e)
+            self.close()
+
+            header_future = None
+            self._clear_callbacks()
+
+            raise gen.Return(False)
+
+        raise gen.Return(True)
+
+    @gen.coroutine
+    def read_body(self, delegate, chunk_size=None):
+        _delegate, delegate = self._parse_delegate(delegate)
+
+        if not _delegate.skip_body:
+            try:
                 body_future = self._read_body(
-                    start_line.code, headers, delegate)
+                    _delegate.code, _delegate.headers, delegate)
                 if body_future is not None:
                     if self._body_timeout is None:
                         yield body_future
@@ -195,52 +224,109 @@ class HTTPConnection(HTTP1Connection):
                                          self.context)
                             self.stream.close()
                             raise gen.Return(False)
-            self._read_finished = True
 
-            need_delegate_close = False
-            with _ExceptionLoggingContext(app_log):
-                delegate.finish()
-            # If we're waiting for the application to produce an asynchronous
-            # response, and we're not detached, register a close callback
-            # on the stream (we didn't need one while we were reading)
-            if (not self._finish_future.done() and
-                    self.stream is not None and
-                    not self.stream.closed()):
-                self.stream.set_close_callback(self._on_connection_close)
-                yield self._finish_future
-            if self._disconnect_on_finish:
+                self._read_finished = True
+
+                _delegate.need_delegate_close = False
+
+                # If we're waiting for the application to produce an asynchronous
+                # response, and we're not detached, register a close callback
+                # on the stream (we didn't need one while we were reading)
+                if (not self._finish_future.done() and
+                        self.stream is not None and
+                        not self.stream.closed()):
+                    self.stream.set_close_callback(self._on_connection_close)
+                    yield self._finish_future
+                if self._disconnect_on_finish:
+                    self.close()
+                if self.stream is None:
+                    raise gen.Return(False)
+            except httputil.HTTPInputError as e:
+                gen_log.info("Malformed HTTP message from %s: %s",
+                             self.context, e)
                 self.close()
-            if self.stream is None:
                 raise gen.Return(False)
-        except HTTPInputError as e:
-            gen_log.info("Malformed HTTP message from %s: %s",
-                         self.context, e)
-            self.close()
-            raise gen.Return(False)
-        finally:
-            if need_delegate_close:
-                with _ExceptionLoggingContext(app_log):
-                    delegate.on_connection_close()
-            header_future = None
-            self._clear_callbacks()
+            finally:
+                if _delegate.need_delegate_close:
+                    with _ExceptionLoggingContext(app_log):
+                        delegate.on_connection_close()
+                self._clear_callbacks()
         raise gen.Return(True)
+
+    @gen.coroutine
+    def read_stream_body(self, delegate):
+        pass
+
+    def _read_body(self, code, headers,
+            delegate, chunk_size=None):
+        if "Content-Length" in headers:
+            if "Transfer-Encoding" in headers:
+                # Response cannot contain both Content-Length and
+                # Transfer-Encoding headers.
+                # http://tools.ietf.org/html/rfc7230#section-3.3.3
+                raise httputil.HTTPInputError(
+                    "Response with both Transfer-Encoding and Content-Length")
+            if "," in headers["Content-Length"]:
+                # Proxies sometimes cause Content-Length headers to get
+                # duplicated.  If all the values are identical then we can
+                # use them but if they differ it's an error.
+                pieces = re.split(r',\s*', headers["Content-Length"])
+                if any(i != pieces[0] for i in pieces):
+                    raise httputil.HTTPInputError(
+                        "Multiple unequal Content-Lengths: %r" %
+                        headers["Content-Length"])
+                headers["Content-Length"] = pieces[0]
+
+            try:
+                content_length = int(headers["Content-Length"])
+            except ValueError:
+                # Handles non-integer Content-Length value.
+                raise httputil.HTTPInputError(
+                    "Only integer Content-Length is allowed: %s" % headers["Content-Length"])
+
+            if content_length > self._max_body_size:
+                raise httputil.HTTPInputError("Content-Length too long")
+        else:
+            content_length = None
+
+        if code == 204:
+            # This response code is not allowed to have a non-empty body,
+            # and has an implicit length of zero instead of read-until-close.
+            # http://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html#sec4.3
+            if ("Transfer-Encoding" in headers or
+                    content_length not in (None, 0)):
+                raise httputil.HTTPInputError(
+                    "Response with code %d should not have body" % code)
+            content_length = 0
+
+        if content_length is not None:
+            return self._read_fixed_body(content_length, delegate)
+        if headers.get("Transfer-Encoding", "").lower() == "chunked":
+            return self._read_chunked_body(delegate)
+        if self.is_client:
+            return self._read_body_until_close(delegate)
+        return None
 
 
 class MessageDelegate(HTTPMessageDelegate):
     """ Message delegate.
     """
 
-    def __init__(self, request, final_callback):
+    def __init__(self, request, connection, final_callback):
         self.code = None
         self.reason = None
         self.headers = None
-        self.data = None
+        self.body = None
         self.chunks = []
 
         self.request = request
+        self.connection = connection
         self.final_callback = final_callback
 
         self.io_loop = IOLoop.current()
+
+        self.skip_body = False
+        self.need_delegate_close = True
 
     def headers_received(self, start_line, headers):
         """Called when the HTTP headers have been received and parsed.
@@ -264,7 +350,10 @@ class MessageDelegate(HTTPMessageDelegate):
 
         May return a `.Future` for flow control.
         """
-        self.chunks.append(chunk)
+        if self.body:
+            self.body.write(chunk)
+        else:
+            self.chunks.append(chunk)
 
     def finish(self):
         """Called after the last chunk of data has been received."""
