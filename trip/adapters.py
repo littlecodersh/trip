@@ -203,7 +203,7 @@ class HTTPConnection(HTTP1Connection):
         raise gen.Return(True)
 
     @gen.coroutine
-    def read_body(self, delegate, chunk_size=None):
+    def read_body(self, delegate):
         _delegate, delegate = self._parse_delegate(delegate)
 
         if not _delegate.skip_body:
@@ -254,8 +254,54 @@ class HTTPConnection(HTTP1Connection):
         raise gen.Return(True)
 
     @gen.coroutine
-    def read_stream_body(self, delegate):
-        pass
+    def read_stream_body(self, delegate, chunk_size=1):
+        _delegate, delegate = self._parse_delegate(delegate)
+
+        if not _delegate.skip_body:
+            try:
+                body = self._read_fixed_body(chunk_size, delegate)
+                if body_future is not None:
+                    if self._body_timeout is None:
+                        yield body_future
+                    else:
+                        try:
+                            yield gen.with_timeout(
+                                self.stream.io_loop.time() + self._body_timeout,
+                                body_future,
+                                quiet_exceptions=StreamClosedError)
+                        except gen.TimeoutError:
+                            gen_log.info("Timeout reading body from %s",
+                                         self.context)
+                            self.stream.close()
+                            raise gen.Return(False)
+
+                # self._read_finished = True
+                # 
+                # _delegate.need_delegate_close = False
+                # 
+                # # If we're waiting for the application to produce an asynchronous
+                # # response, and we're not detached, register a close callback
+                # # on the stream (we didn't need one while we were reading)
+                # if (not self._finish_future.done() and
+                #         self.stream is not None and
+                #         not self.stream.closed()):
+                #     self.stream.set_close_callback(self._on_connection_close)
+                #     yield self._finish_future
+                # if self._disconnect_on_finish:
+                #     self.close()
+                # if self.stream is None:
+                #     raise gen.Return(False)
+            except httputil.HTTPInputError as e:
+                gen_log.info("Malformed HTTP message from %s: %s",
+                             self.context, e)
+                self.close()
+                raise gen.Return(False)
+            # finally:
+            #     if _delegate.need_delegate_close:
+            #         with _ExceptionLoggingContext(app_log):
+            #             delegate.on_connection_close()
+            #     self._clear_callbacks()
+        raise gen.Return(True)
 
     def _read_body(self, code, headers,
             delegate, chunk_size=None):

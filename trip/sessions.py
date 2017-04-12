@@ -155,13 +155,82 @@ class Session(object):
 
         return self.send(request, **send_kwargs)
 
-    def get(self, url, params=None, headers=None):
-        return self.request('GET', url, params, headers=headers)
+    def get(self, url, **kwargs):
+        r"""Sends a GET request. Returns :class:`Response` object.
 
-    def post(self, url, params=None,
-            data=None, headers=None, files=None):
-        return self.request('POST', url, data=data,
-            headers=headers, files=files)
+        :param url: URL for the new :class:`Request` object.
+        :param \*\*kwargs: Optional arguments that ``request`` takes.
+        :rtype: requests.Response
+        """
+
+        kwargs.setdefault('allow_redirects', True)
+        return self.request('GET', url, **kwargs)
+
+    def options(self, url, **kwargs):
+        r"""Sends a OPTIONS request. Returns :class:`Response` object.
+
+        :param url: URL for the new :class:`Request` object.
+        :param \*\*kwargs: Optional arguments that ``request`` takes.
+        :rtype: requests.Response
+        """
+
+        kwargs.setdefault('allow_redirects', True)
+        return self.request('OPTIONS', url, **kwargs)
+
+    def head(self, url, **kwargs):
+        r"""Sends a HEAD request. Returns :class:`Response` object.
+
+        :param url: URL for the new :class:`Request` object.
+        :param \*\*kwargs: Optional arguments that ``request`` takes.
+        :rtype: requests.Response
+        """
+
+        kwargs.setdefault('allow_redirects', False)
+        return self.request('HEAD', url, **kwargs)
+
+    def post(self, url, data=None, json=None, **kwargs):
+        r"""Sends a POST request. Returns :class:`Response` object.
+
+        :param url: URL for the new :class:`Request` object.
+        :param data: (optional) Dictionary, bytes, or file-like object to send in the body of the :class:`Request`.
+        :param json: (optional) json to send in the body of the :class:`Request`.
+        :param \*\*kwargs: Optional arguments that ``request`` takes.
+        :rtype: requests.Response
+        """
+
+        return self.request('POST', url, data=data, json=json, **kwargs)
+
+    def put(self, url, data=None, **kwargs):
+        r"""Sends a PUT request. Returns :class:`Response` object.
+
+        :param url: URL for the new :class:`Request` object.
+        :param data: (optional) Dictionary, bytes, or file-like object to send in the body of the :class:`Request`.
+        :param \*\*kwargs: Optional arguments that ``request`` takes.
+        :rtype: requests.Response
+        """
+
+        return self.request('PUT', url, data=data, **kwargs)
+
+    def patch(self, url, data=None, **kwargs):
+        r"""Sends a PATCH request. Returns :class:`Response` object.
+
+        :param url: URL for the new :class:`Request` object.
+        :param data: (optional) Dictionary, bytes, or file-like object to send in the body of the :class:`Request`.
+        :param \*\*kwargs: Optional arguments that ``request`` takes.
+        :rtype: requests.Response
+        """
+
+        return self.request('PATCH', url, data=data, **kwargs)
+
+    def delete(self, url, **kwargs):
+        r"""Sends a DELETE request. Returns :class:`Response` object.
+
+        :param url: URL for the new :class:`Request` object.
+        :param \*\*kwargs: Optional arguments that ``request`` takes.
+        :rtype: requests.Response
+        """
+
+        return self.request('DELETE', url, **kwargs)
 
     def send(self, request, **kwargs):
         """Send a given PreparedRequest.

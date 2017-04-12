@@ -1,3 +1,4 @@
+import codecs
 from socket import AF_INET, AF_UNSPEC
 
 from requests.models import (
@@ -7,9 +8,12 @@ from requests.models import (
     ITER_CHUNK_SIZE)
 from requests.compat import urlparse, urlsplit
 
+from tornado.concurrent import Future
 from tornado.httpclient import HTTPRequest
 from tornado.httputil import (split_host_and_port,
     RequestStartLine, HTTPHeaders)
+
+from .utils import iter_slices_future
 
 
 class Request(_Request):
@@ -216,40 +220,57 @@ class Response(_Response):
         """
 
         def generate():
-            # Special case for urllib3.
-            if hasattr(self.raw, 'stream'):
-                try:
-                    for chunk in self.raw.stream(chunk_size, decode_content=True):
-                        yield chunk
-                except ProtocolError as e:
-                    raise ChunkedEncodingError(e)
-                except DecodeError as e:
-                    raise ContentDecodingError(e)
-                except ReadTimeoutError as e:
-                    raise ConnectionError(e)
+            decode = decode_unicode
+            if self.encoding is None:
+                decode = False
+            if decode:
+                decoder = codecs.getincrementaldecoder(
+                    self.encoding)(errors='replace')
+
+            if self.raw.request.stream:
+                content_remain = True
+                while content_remain:
+                    future = Future()
+
+                    def callback(status):
+                        chunk = self.raw.body.getvalue()
+                        self.raw.body.truncate(0)
+                        self.raw.body.seek(0)
+                        if decode:
+                            chunk = decoder.decode(chunk)
+                        if not chunk:
+                            content_remain = False
+                        future.set_result(chunk)
+
+                    self.raw.connection.read_stream_body(
+                        self.raw, chunk_size, callback=callback)
+                    yield future
             else:
-                # Standard file-like object.
+                self.raw.body.seek(0)
                 while True:
-                    chunk = self.raw.read(chunk_size)
+                    future = Future()
+                    chunk = self.raw.body.read(chunk_size)
+                    if decode:
+                        chunk = decoder.decode(chunk)
                     if not chunk:
                         break
-                    yield chunk
+                    else:
+                        future.set_result(chunk)
+                        yield future
 
             self._content_consumed = True
 
         if self._content_consumed and isinstance(self._content, bool):
             raise StreamConsumedError()
         elif chunk_size is not None and not isinstance(chunk_size, int):
-            raise TypeError("chunk_size must be an int, it is instead a %s." % type(chunk_size))
+            raise TypeError("chunk_size must be an int, it is instead a %s."
+                % type(chunk_size))
         # simulate reading small chunks of the content
-        reused_chunks = iter_slices(self._content, chunk_size)
+        reused_chunks = iter_slices_future(self, chunk_size, decode_unicode)
 
         stream_chunks = generate()
 
         chunks = reused_chunks if self._content_consumed else stream_chunks
-
-        if decode_unicode:
-            chunks = stream_decode_response_unicode(chunks, self)
 
         return chunks
 
