@@ -40,10 +40,18 @@ class Session(object):
     """
 
     def __init__(self):
-        self.adapter = HTTPAdapter()
-        self.cookies = cookiejar_from_dict({})
         self.headers = default_headers()
+        self.auth = None
+        self.proxies = {}
+        # self.hooks = default_hooks()
         self.params = {}
+        self.stream = False
+        self.verify = True
+        self.cert = None
+        # self.max_redirects = DEFAULT_REDIRECT_LIMIT
+        self.trust_env = True
+        self.cookies = cookiejar_from_dict({})
+        self.adapter = HTTPAdapter()
 
     def prepare_request(self, request):
         cookies = request.cookies or {}
@@ -139,19 +147,18 @@ class Session(object):
         )
         request = self.prepare_request(req)
 
-        # proxies = proxies or {}
-        # 
-        # settings = self.merge_environment_settings(
-        #     prep.url, proxies, stream, verify, cert
-        # )
-        # 
-        # # Send the request.
-        # send_kwargs = {
-        #     'timeout': timeout,
-        #     'allow_redirects': allow_redirects,
-        # }
-        send_kwargs = {}
-        # send_kwargs.update(settings)
+        proxies = proxies or {}
+
+        settings = self.merge_environment_settings(
+            request.url, proxies, stream, verify, cert
+        )
+
+        # Send the request.
+        send_kwargs = {
+            'timeout': timeout,
+            'allow_redirects': allow_redirects,
+        }
+        send_kwargs.update(settings)
 
         return self.send(request, **send_kwargs)
 
@@ -247,10 +254,40 @@ class Session(object):
             response = self.prepare_response(request, f.result())
             future.set_result(response)
 
+        allow_redirects = kwargs.pop('allow_redirects', True)
         resp = self.adapter.send(request, **kwargs)
         resp.add_done_callback(handle_future)
 
         return future
+
+    def merge_environment_settings(self, url, proxies, stream, verify, cert):
+        """
+        Check the environment and merge it with some settings.
+
+        :rtype: dict
+        """
+        # Gather clues from the surrounding environment.
+        # if self.trust_env:
+        #     # Set environment's proxies.
+        #     no_proxy = proxies.get('no_proxy') if proxies is not None else None
+        #     env_proxies = get_environ_proxies(url, no_proxy=no_proxy)
+        #     for (k, v) in env_proxies.items():
+        #         proxies.setdefault(k, v)
+        # 
+        #     # Look for requests environment configuration and be compatible
+        #     # with cURL.
+        #     if verify is True or verify is None:
+        #         verify = (os.environ.get('REQUESTS_CA_BUNDLE') or
+        #                   os.environ.get('CURL_CA_BUNDLE'))
+
+        # Merge all the kwargs.
+        proxies = merge_setting(proxies, self.proxies)
+        stream = merge_setting(stream, self.stream)
+        verify = merge_setting(verify, self.verify)
+        cert = merge_setting(cert, self.cert)
+
+        return {'verify': verify, 'proxies': proxies, 'stream': stream,
+                'cert': cert}
 
 
 session = Session

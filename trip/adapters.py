@@ -105,12 +105,12 @@ class HTTPAdapter(BaseAdapter):
             # else:
             #     future.set_result(response)
             future.set_result(response)
-        resp = MessageDelegate(request, connection, handle_response)
+        resp = MessageDelegate(request, connection, handle_response, stream)
 
         connection._read_message(resp)
         yield future # header is automatically set in resp
 
-        if not request.stream:
+        if not stream:
             yield connection.read_body(resp)
 
         raise gen.Return(resp)
@@ -241,7 +241,7 @@ class HTTPConnection(HTTP1Connection):
                     self.close()
                 if self.stream is None:
                     raise gen.Return(False)
-            except httputil.HTTPInputError as e:
+            except HTTPInputError as e:
                 gen_log.info("Malformed HTTP message from %s: %s",
                              self.context, e)
                 self.close()
@@ -254,18 +254,19 @@ class HTTPConnection(HTTP1Connection):
         raise gen.Return(True)
 
     @gen.coroutine
-    def read_stream_body(self, delegate, chunk_size=1):
+    def read_stream_body(self, delegate, chunk_size=1, stream_callback=None):
         _delegate, delegate = self._parse_delegate(delegate)
+        remain_content = False
 
         if not _delegate.skip_body:
             try:
-                body = self._read_fixed_body(chunk_size, delegate)
+                body_future = self._read_fixed_body(chunk_size, delegate)
                 if body_future is not None:
                     if self._body_timeout is None:
-                        yield body_future
+                        remain_content = yield body_future
                     else:
                         try:
-                            yield gen.with_timeout(
+                            remain_content = yield gen.with_timeout(
                                 self.stream.io_loop.time() + self._body_timeout,
                                 body_future,
                                 quiet_exceptions=StreamClosedError)
@@ -291,7 +292,7 @@ class HTTPConnection(HTTP1Connection):
                 #     self.close()
                 # if self.stream is None:
                 #     raise gen.Return(False)
-            except httputil.HTTPInputError as e:
+            except HTTPInputError as e:
                 gen_log.info("Malformed HTTP message from %s: %s",
                              self.context, e)
                 self.close()
@@ -301,7 +302,7 @@ class HTTPConnection(HTTP1Connection):
             #         with _ExceptionLoggingContext(app_log):
             #             delegate.on_connection_close()
             #     self._clear_callbacks()
-        raise gen.Return(True)
+        raise gen.Return(remain_content)
 
     def _read_body(self, code, headers,
             delegate, chunk_size=None):
@@ -310,7 +311,7 @@ class HTTPConnection(HTTP1Connection):
                 # Response cannot contain both Content-Length and
                 # Transfer-Encoding headers.
                 # http://tools.ietf.org/html/rfc7230#section-3.3.3
-                raise httputil.HTTPInputError(
+                raise HTTPInputError(
                     "Response with both Transfer-Encoding and Content-Length")
             if "," in headers["Content-Length"]:
                 # Proxies sometimes cause Content-Length headers to get
@@ -318,7 +319,7 @@ class HTTPConnection(HTTP1Connection):
                 # use them but if they differ it's an error.
                 pieces = re.split(r',\s*', headers["Content-Length"])
                 if any(i != pieces[0] for i in pieces):
-                    raise httputil.HTTPInputError(
+                    raise HTTPInputError(
                         "Multiple unequal Content-Lengths: %r" %
                         headers["Content-Length"])
                 headers["Content-Length"] = pieces[0]
@@ -327,11 +328,11 @@ class HTTPConnection(HTTP1Connection):
                 content_length = int(headers["Content-Length"])
             except ValueError:
                 # Handles non-integer Content-Length value.
-                raise httputil.HTTPInputError(
+                raise HTTPInputError(
                     "Only integer Content-Length is allowed: %s" % headers["Content-Length"])
 
             if content_length > self._max_body_size:
-                raise httputil.HTTPInputError("Content-Length too long")
+                raise HTTPInputError("Content-Length too long")
         else:
             content_length = None
 
@@ -341,7 +342,7 @@ class HTTPConnection(HTTP1Connection):
             # http://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html#sec4.3
             if ("Transfer-Encoding" in headers or
                     content_length not in (None, 0)):
-                raise httputil.HTTPInputError(
+                raise HTTPInputError(
                     "Response with code %d should not have body" % code)
             content_length = 0
 
@@ -353,12 +354,31 @@ class HTTPConnection(HTTP1Connection):
             return self._read_body_until_close(delegate)
         return None
 
+    @gen.coroutine
+    def _read_fixed_body(self, content_length, delegate):
+        while 0 < content_length:
+            try:
+                body = yield self.stream.read_bytes(
+                    min(self.params.chunk_size, content_length), partial=True)
+            except StreamClosedError:
+                # with partial stream will update close status after receiving
+                # the last chunk, so we catch StreamClosedError instead
+                raise gen.Return(False)
+            content_length -= len(body)
+            if not self._write_finished or self.is_client:
+                with _ExceptionLoggingContext(app_log):
+                    ret = delegate.data_received(body)
+                    if ret is not None:
+                        yield ret
+        raise gen.Return(True)
+
 
 class MessageDelegate(HTTPMessageDelegate):
     """ Message delegate.
     """
 
-    def __init__(self, request, connection, final_callback):
+    def __init__(self, request, connection,
+            final_callback, stream=False):
         self.code = None
         self.reason = None
         self.headers = None
@@ -368,6 +388,7 @@ class MessageDelegate(HTTPMessageDelegate):
         self.request = request
         self.connection = connection
         self.final_callback = final_callback
+        self.stream = stream
 
         self.io_loop = IOLoop.current()
 
@@ -404,7 +425,7 @@ class MessageDelegate(HTTPMessageDelegate):
     def finish(self):
         """Called after the last chunk of data has been received."""
         data = b''.join(self.chunks)
-        if self.request.stream:
+        if self.stream:
             buffer_ = BytesIO()
         else:
             buffer_ = BytesIO(data)

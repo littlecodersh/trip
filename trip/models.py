@@ -148,7 +148,6 @@ class PreparedRequest(_PreparedRequest):
         self.start_line = None
         self.headers = None
         self.body = None
-        self.stream = False
 
     def prepare(self,
             method=None, url=None, headers=None, files=None, data=None,
@@ -227,8 +226,8 @@ class Response(_Response):
                 decoder = codecs.getincrementaldecoder(
                     self.encoding)(errors='replace')
 
-            if self.raw.request.stream:
-                content_remain = True
+            if self.raw.stream:
+                content_remain = {'': ''}
                 while content_remain:
                     future = Future()
 
@@ -238,13 +237,16 @@ class Response(_Response):
                         self.raw.body.seek(0)
                         if decode:
                             chunk = decoder.decode(chunk)
-                        if not chunk:
-                            content_remain = False
+                        if not status:
+                            content_remain.clear()
                         future.set_result(chunk)
 
                     self.raw.connection.read_stream_body(
                         self.raw, chunk_size, callback=callback)
                     yield future
+
+                    while not future.done():
+                        yield future
             else:
                 self.raw.body.seek(0)
                 while True:
