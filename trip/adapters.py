@@ -16,7 +16,7 @@ from io import BytesIO
 from socket import AF_INET, AF_UNSPEC
 
 from tornado import gen
-from tornado.concurrent import TracebackFuture
+from tornado.concurrent import Future
 from tornado.http1connection import (
     HTTP1Connection, HTTP1ConnectionParameters,
     _ExceptionLoggingContext, _GzipMessageDelegate)
@@ -112,13 +112,20 @@ class HTTPAdapter(BaseAdapter):
             connection.write(request.body) #TODO: partial sending
         connection.finish()
 
-        resp = MessageDelegate(request, connection, lambda x: x, stream)
+        future = Future()
+        def handle_response(response):
+            if isinstance(response, Exception):
+                future.set_exception(response)
+            else:
+                future.set_result(response)
+        resp = MessageDelegate(request, connection, handle_response, stream)
 
         headers_received = yield connection.read_headers(resp)
 
         if not stream and headers_received:
             yield connection.read_body(resp)
 
+        resp = yield future
         raise gen.Return(resp)
 
     def close(self):
@@ -256,7 +263,7 @@ class HTTPConnection(HTTP1Connection):
             finally:
                 if need_delegate_close:
                     with _ExceptionLoggingContext(app_log):
-                        delegate.on_connection_close()
+                        delegate.on_connection_close(self.stream.error)
                 self._clear_callbacks()
         raise gen.Return(True)
 
@@ -302,7 +309,7 @@ class HTTPConnection(HTTP1Connection):
             finally:
                 if need_delegate_close:
                     with _ExceptionLoggingContext(app_log):
-                        delegate.on_connection_close()
+                        delegate.on_connection_close(self.stream.error)
                 if not remain_content:
                     self._clear_callbacks()
         raise gen.Return(remain_content)
@@ -382,12 +389,20 @@ class MessageDelegate(HTTPMessageDelegate):
         else:
             buffer_ = BytesIO(data)
         self.body = buffer_
-        self.io_loop.add_callback(self.final_callback, buffer_)
+        self._run_callback(self)
 
-    def on_connection_close(self):
+    def on_connection_close(self, error=None):
         """Called if the connection is closed without finishing the request.
 
         If ``headers_received`` is called, either ``finish`` or
         ``on_connection_close`` will be called, but not both.
         """
-        pass
+        message = "Connection closed"
+        error = error or HTTPError(599, message)
+        self._run_callback(error)
+
+    def _run_callback(self, response):
+        if self.final_callback is not None:
+            final_callback = self.final_callback
+            self.final_callback = None
+            self.io_loop.add_callback(final_callback, response)
