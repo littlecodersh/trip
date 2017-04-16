@@ -1,5 +1,5 @@
 """
-trips.adapters
+trip.adapters
 ~~~~~~~~~~~~~~~~~
 
 This module contains the transport adapters that Trip uses to define

@@ -1,3 +1,10 @@
+"""
+trip.models
+~~~~~~~~~~~~~~~
+
+This module contains the primary objects that power Trip.
+"""
+
 import codecs
 from socket import AF_INET, AF_UNSPEC
 
@@ -5,13 +12,16 @@ from requests.models import (
     PreparedRequest as _PreparedRequest,
     Request as _Request, 
     Response as _Response,
-    ITER_CHUNK_SIZE)
+    ITER_CHUNK_SIZE, CONTENT_CHUNK_SIZE)
 from requests.compat import urlparse, urlsplit
+from requests.utils import iter_slices
 
+from tornado import gen
 from tornado.concurrent import Future
 from tornado.httpclient import HTTPRequest
 from tornado.httputil import (split_host_and_port,
-    RequestStartLine, HTTPHeaders)
+    RequestStartLine, HTTPHeaders, HTTPMessageDelegate)
+from tornado.gen import Return
 
 from .utils import iter_slices_future
 
@@ -250,31 +260,32 @@ class Response(_Response):
             else:
                 self.raw.body.seek(0)
                 while True:
-                    future = Future()
                     chunk = self.raw.body.read(chunk_size)
                     if decode:
                         chunk = decoder.decode(chunk)
                     if not chunk:
                         break
                     else:
-                        future.set_result(chunk)
-                        yield future
+                        yield chunk
 
             self._content_consumed = True
 
         if self._content_consumed and isinstance(self._content, bool):
             raise StreamConsumedError()
         elif chunk_size is not None and not isinstance(chunk_size, int):
-            raise TypeError("chunk_size must be an int, it is instead a %s."
+            raise TypeError('chunk_size must be an int, it is instead a %s.'
                 % type(chunk_size))
-        # simulate reading small chunks of the content
-        reused_chunks = iter_slices_future(self, chunk_size, decode_unicode)
+        elif not isinstance(self.raw, HTTPMessageDelegate):
+            raise TypeError('self.raw must be a trip.adapters.MessageDelegate')
 
-        stream_chunks = generate()
-
-        chunks = reused_chunks if self._content_consumed else stream_chunks
-
-        return chunks
+        if self._content_consumed:
+            # simulate reading small chunks of the content
+            if self.raw.stream:
+                return iter_slices_future(self, chunk_size, decode_unicode)
+            else:
+                return iter_slices(self._content, chunk_size)
+        else:
+            return generate()
 
     def iter_lines(self, chunk_size=ITER_CHUNK_SIZE, decode_unicode=None, delimiter=None):
         """Iterates over the response data, one line at a time.  When
@@ -284,12 +295,44 @@ class Response(_Response):
         .. note:: This method is not reentrant safe.
         """
 
-        pending = None
+        if getattr(self.raw, 'stream', False):
+            return self._iter_stream_lines(chunk_size, decode_unicode, delimiter)
+        else:
+            return _Response.iter_lines(self, chunk_size, decode_unicode, delimiter)
 
-        for chunk in self.iter_content(chunk_size=chunk_size, decode_unicode=decode_unicode):
+    def _iter_stream_lines(self, chunk_size=ITER_CHUNK_SIZE,
+            decode_unicode=None, delimiter=None):
+        """ stream version of iter_lines.
 
-            if pending is not None:
-                chunk = pending + chunk
+        Basic Usage::
+
+          >>> import trip
+          >>> @trip.coroutine
+          >>> def main():
+          >>>     url = 'http://httpbin.org/get'
+          >>>     r = yield trip.get(url, stream=True)
+          >>>     for line in r.iter_lines(1):
+          >>>         line = yield line
+          >>>         if line is not None:
+          >>>             print(line)
+          >>> trip.IOLoop.current().run_sync(main)
+          {
+            "args": {},
+            "headers": {}
+            "origin": "0.0.0.0",
+            "url": "http://httpbin.org/get"
+          }
+        """
+
+        content = {'': []}
+        pending = {'': None}
+
+        def handle_content(f):
+
+            chunk = f.result()
+
+            if pending[''] is not None:
+                chunk = pending[''] + chunk
 
             if delimiter:
                 lines = chunk.split(delimiter)
@@ -297,19 +340,44 @@ class Response(_Response):
                 lines = chunk.splitlines()
 
             if lines and lines[-1] and chunk and lines[-1][-1] == chunk[-1]:
-                pending = lines.pop()
+                pending[''] = lines.pop()
             else:
-                pending = None
+                pending[''] = None
 
-            for line in lines:
-                yield line
+            content[''] = lines[1:]
+            f._result = lines[0] if lines else None
 
-        if pending is not None:
-            yield pending
+        for future in self.iter_content(chunk_size, decode_unicode):
+
+            future.add_done_callback(handle_content)
+            yield future
+
+            for line in content['']:
+                future = Future()
+                future.set_result(line)
+                yield future
+
+        if pending[''] is not None:
+            future = Future()
+            future.set_result(pending[''])
+            yield future
+
+    @gen.coroutine
+    def _get_stream_content(self):
+        if self._content is False: # no content has been set
+            chunks = []
+            for chunk in self.iter_content(CONTENT_CHUNK_SIZE):
+                chunk = yield chunk
+                chunks.append(chunk)
+            self._content = b''.join(chunks)
+        raise gen.Return(self._content)
 
     @property
     def content(self):
-        """Content of the response, in bytes."""
+        """ Content of the response.
+        If stream is True, a trip.Future object will be returned.
+        If stream is False, content will be returned in bytes.
+        """
 
         if self._content is False:
             # Read the contents.
@@ -319,13 +387,15 @@ class Response(_Response):
 
             if self.status_code == 0 or self.raw is None:
                 self._content = None
-            else:
-                self._content = bytes().join(self.iter_content(CONTENT_CHUNK_SIZE)) or bytes()
+                self._content_consumed = True
 
-        self._content_consumed = True
-        # don't need to release the connection; that's been handled by urllib3
-        # since we exhausted the data.
-        return self._content
+            if not self.raw.stream:
+                self._content = b''.join(self.iter_content(CONTENT_CHUNK_SIZE))
+
+        if self.raw.stream:
+            return self._get_stream_content()
+        else:
+            return self._content
 
     def close(self):
         pass
