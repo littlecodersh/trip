@@ -1,3 +1,11 @@
+"""
+trip.session
+~~~~~~~~~~~~~~~~
+
+This module provides a Session object to manage and persist settings across
+trip (cookies, auth, proxies).
+"""
+
 from functools import partial
 
 import requests
