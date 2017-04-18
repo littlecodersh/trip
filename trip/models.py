@@ -13,7 +13,8 @@ from requests.models import (
     Request as _Request, 
     Response as _Response,
     ITER_CHUNK_SIZE, CONTENT_CHUNK_SIZE)
-from requests.compat import urlparse, urlsplit
+from requests.compat import (
+    urlparse, urlsplit, chardet, str as _str)
 from requests.utils import iter_slices
 
 from tornado import gen
@@ -210,6 +211,58 @@ class Response(_Response):
     # def is_permanent_redirect(self):
     # @property
     # def next(self):
+
+    @property
+    def text(self):
+        """Content of the response, in unicode.
+
+        If Response.encoding is None, encoding will be guessed using
+        ``chardet``.
+
+        The encoding of the response content is determined based solely on HTTP
+        headers, following RFC 2616 to the letter. If you can take advantage of
+        non-HTTP knowledge to make a better guess at the encoding, you should
+        set ``r.encoding`` appropriately before accessing this property.
+        """
+
+        def _unicode(content):
+            result = None
+            # Try charset from content-type
+            encoding = self.encoding
+
+            if not content:
+                return _str('')
+
+            # Fallback to auto-detected encoding.
+            if self.encoding is None:
+                encoding = chardet.detect(content)['encoding']
+
+            # Decode unicode from given encoding.
+            try:
+                result = _str(content, encoding, errors='replace')
+            except (LookupError, TypeError):
+                # A LookupError is raised if the encoding was not found which could
+                # indicate a misspelling or similar mistake.
+                #
+                # A TypeError can be raised if encoding is None
+                #
+                # So we try blindly encoding.
+                result = _str(content, errors='replace')
+
+            return result
+
+        @gen.coroutine
+        def _stream_text():
+            content = yield self.content
+            raise Return(_unicode(content))
+
+        if not isinstance(self.raw, HTTPMessageDelegate):
+            raise TypeError('self.raw must be a trip.adapters.MessageDelegate')
+
+        if self.raw.stream:
+            return _stream_text()
+        else:
+            return _unicode(self.content)
 
     def iter_content(self, chunk_size=1, decode_unicode=False):
         """Iterates over the response data.  When stream=True is set on the

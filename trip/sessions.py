@@ -13,7 +13,9 @@ from requests.compat import cookielib
 from requests.cookies import (
     cookiejar_from_dict, merge_cookies, RequestsCookieJar,
     extract_cookies_to_jar, MockRequest, MockResponse)
-from requests.sessions import merge_setting
+from requests.sessions import (
+    Session as _Session,
+    merge_setting)
 from requests.structures import CaseInsensitiveDict
 from requests.utils import get_encoding_from_headers
 from urllib3._collections import HTTPHeaderDict
@@ -28,7 +30,7 @@ from .models import PreparedRequest, Request, Response
 from .utils import default_headers
 
 
-class Session(object):
+class Session(_Session):
     """A Trip session.
 
     Provides cookie persistence, and configuration.
@@ -296,6 +298,9 @@ class Session(object):
 
         return {'verify': verify, 'proxies': proxies, 'stream': stream,
                 'cert': cert}
+
+    def close(self):
+        pass
 
 
 session = Session
