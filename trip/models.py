@@ -14,8 +14,9 @@ from requests.models import (
     Response as _Response,
     ITER_CHUNK_SIZE, CONTENT_CHUNK_SIZE)
 from requests.compat import (
-    urlparse, urlsplit, chardet, str as _str)
-from requests.utils import iter_slices
+    urlparse, urlsplit, chardet, str as _str,
+    json as complexjson)
+from requests.utils import iter_slices, guess_json_utf
 
 from tornado import gen
 from tornado.concurrent import Future
@@ -213,6 +214,25 @@ class Response(_Response):
     # def next(self):
 
     @property
+    def apparent_encoding(self):
+        """The apparent encoding, provided by the chardet library."""
+        def _encoding(content):
+            return chardet.detect(content)['encoding']
+
+        @gen.coroutine
+        def _stream_apparent_encoding():
+            content = yield self.content
+            raise Return(_encoding(content))
+
+        if not isinstance(self.raw, HTTPMessageDelegate):
+            raise TypeError('self.raw must be a trip.adapters.MessageDelegate')
+
+        if self.raw.stream:
+            return _stream_apparent_encoding()
+        else:
+            return _encoding(self.content)
+
+    @property
     def text(self):
         """Content of the response, in unicode.
 
@@ -263,6 +283,47 @@ class Response(_Response):
             return _stream_text()
         else:
             return _unicode(self.content)
+
+    def json(self, **kwargs):
+        r"""Returns the json-encoded content of a response, if any.
+
+        :param \*\*kwargs: Optional arguments that ``json.loads`` takes.
+        :raises ValueError: If the response body does not contain valid json.
+        """
+
+        def _json(content, text):
+            if not self.encoding and content and len(content) > 3:
+                # No encoding set. JSON RFC 4627 section 3 states we should expect
+                # UTF-8, -16 or -32. Detect which one to use; If the detection or
+                # decoding fails, fall back to `self.text` (using chardet to make
+                # a best guess).
+                encoding = guess_json_utf(content)
+                if encoding is not None:
+                    try:
+                        return complexjson.loads(
+                            content.decode(encoding), **kwargs
+                        )
+                    except UnicodeDecodeError:
+                        # Wrong UTF codec detected; usually because it's not UTF-8
+                        # but some other 8-bit codec.  This is an RFC violation,
+                        # and the server didn't bother to tell us what codec *was*
+                        # used.
+                        pass
+            return complexjson.loads(text, **kwargs)
+
+        @gen.coroutine
+        def _stream_json():
+            content = yield self.content
+            text = yield self.text
+            raise Return(_json(content, text))
+
+        if not isinstance(self.raw, HTTPMessageDelegate):
+            raise TypeError('self.raw must be a trip.adapters.MessageDelegate')
+
+        if self.raw.stream:
+            return _stream_json()
+        else:
+            return _json(self.content, self.text)
 
     def iter_content(self, chunk_size=1, decode_unicode=False):
         """Iterates over the response data.  When stream=True is set on the
