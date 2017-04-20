@@ -89,7 +89,7 @@ class Session(_Session):
             headers=merge_setting(request.headers,
                 self.headers, dict_class=CaseInsensitiveDict),
             params=merge_setting(request.params, self.params),
-            # auth=merge_setting(auth, self.auth),
+            auth=merge_setting(request.auth, self.auth),
             cookies=merged_cookies,
             # hooks=merge_hooks(request.hooks, self.hooks),
         )
