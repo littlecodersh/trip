@@ -9,5 +9,7 @@ from tornado.concurrent import Future
 from tornado.gen import coroutine, Return
 from tornado.ioloop import IOLoop
 
-from .api import request, get, post
+from .api import (
+    request, get, options, head, post,
+    put, patch, delete, run)
 from .sessions import session, Session

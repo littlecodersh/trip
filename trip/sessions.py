@@ -13,9 +13,10 @@ from requests.compat import cookielib
 from requests.cookies import (
     cookiejar_from_dict, merge_cookies, RequestsCookieJar,
     extract_cookies_to_jar, MockRequest, MockResponse)
+from requests.hooks import default_hooks, dispatch_hook
 from requests.sessions import (
     Session as _Session,
-    merge_setting)
+    merge_hooks, merge_setting)
 from requests.structures import CaseInsensitiveDict
 from requests.utils import get_encoding_from_headers
 from urllib3._collections import HTTPHeaderDict
@@ -53,7 +54,7 @@ class Session(_Session):
         self.headers = default_headers()
         self.auth = None
         self.proxies = {}
-        # self.hooks = default_hooks()
+        self.hooks = default_hooks()
         self.params = {}
         self.stream = False
         self.verify = True
@@ -91,11 +92,11 @@ class Session(_Session):
             params=merge_setting(request.params, self.params),
             auth=merge_setting(request.auth, self.auth),
             cookies=merged_cookies,
-            # hooks=merge_hooks(request.hooks, self.hooks),
+            hooks=merge_hooks(request.hooks, self.hooks),
         )
         return p
 
-    def prepare_response(self, req, resp):
+    def prepare_response(self, req, resp, **kwargs):
         """Builds a :class:`Response <trip.Response>` object from a tornado
         response. This should not be called from user code, and is only exposed
         for use when subclassing the
@@ -135,6 +136,9 @@ class Session(_Session):
 
         response.request = req
         # response.connection = self
+
+        # Response manipulation hooks
+        response = dispatch_hook('response', req.hooks, response, **kwargs)
 
         return response
 
@@ -261,7 +265,7 @@ class Session(_Session):
         future = Future()
 
         def handle_future(f):
-            response = self.prepare_response(request, f.result())
+            response = self.prepare_response(request, f.result(), **kwargs)
             future.set_result(response)
 
         allow_redirects = kwargs.pop('allow_redirects', True)
