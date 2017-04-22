@@ -7,18 +7,27 @@ trip (cookies, auth, proxies).
 """
 
 from functools import partial
+from datetime import timedelta
 
 import requests
-from requests.compat import cookielib
+from requests.auth import _basic_auth_str
+from requests.compat import (cookielib, urljoin, urlparse)
 from requests.cookies import (
     cookiejar_from_dict, merge_cookies, RequestsCookieJar,
     extract_cookies_to_jar, MockRequest, MockResponse)
+from requests.exceptions import TooManyRedirects
 from requests.hooks import default_hooks, dispatch_hook
+from requests.models import DEFAULT_REDIRECT_LIMIT
 from requests.sessions import (
-    Session as _Session,
-    merge_hooks, merge_setting)
+    SessionRedirectMixin as _SessionRedirectMixin,
+    merge_hooks, merge_setting,
+    preferred_clock)
+from requests.status_codes import codes
 from requests.structures import CaseInsensitiveDict
-from requests.utils import get_encoding_from_headers
+from requests.utils import (
+    get_auth_from_url, get_encoding_from_headers,
+    get_netrc_auth, requote_uri, should_bypass_proxies)
+from requests._internal_utils import to_native_string
 from urllib3._collections import HTTPHeaderDict
 
 import tornado
@@ -31,7 +40,153 @@ from .models import PreparedRequest, Request, Response
 from .utils import default_headers
 
 
-class Session(_Session):
+class SessionRedirectMixin(_SessionRedirectMixin):
+    """Session redirect mix in.  """
+
+    def resolve_redirects(self, resp, req, stream=False, timeout=None,
+                          verify=True, cert=None, proxies=None, yield_requests=False, **adapter_kwargs):
+        """Receives a Response. Returns a generator of Responses or Requests."""
+
+        hist = []  # keep track of history
+
+        url = self.get_redirect_target(resp)
+        while url:
+            prepared_request = req.copy()
+
+            # Update history and keep track of redirects.
+            # resp.history must ignore the original request in this loop
+            hist.append(resp)
+            resp.history = hist[1:]
+
+            # Consume socket so it can be released
+            resp.content
+
+            if self.max_redirects <= len(resp.history):
+                raise TooManyRedirects('Exceeded %s redirects.' % self.max_redirects, response=resp)
+
+            # Release the connection
+            resp.close()
+
+            # Handle redirection without scheme (see: RFC 1808 Section 4)
+            if url.startswith('//'):
+                parsed_rurl = urlparse(resp.url)
+                url = '%s:%s' % (to_native_string(parsed_rurl.scheme), url)
+
+            # The scheme should be lower case...
+            parsed = urlparse(url)
+            url = parsed.geturl()
+
+            # Facilitate relative 'location' headers, as allowed by RFC 7231.
+            # (e.g. '/path/to/resource' instead of 'http://domain.tld/path/to/resource')
+            # Compliant with RFC3986, we percent encode the url.
+            if not parsed.netloc:
+                url = urljoin(resp.url, requote_uri(url))
+            else:
+                url = requote_uri(url)
+
+            prepared_request.url = to_native_string(url)
+
+            self.rebuild_method(prepared_request, resp)
+
+            # https://github.com/requests/requests/issues/1084
+            if resp.status_code not in (codes.temporary_redirect, codes.permanent_redirect):
+                # https://github.com/requests/requests/issues/3490
+                purged_headers = ('Content-Length', 'Content-Type', 'Transfer-Encoding')
+                for header in purged_headers:
+                    prepared_request.headers.pop(header, None)
+                prepared_request.body = None
+
+            headers = prepared_request.headers
+            try:
+                del headers['Cookie']
+            except KeyError:
+                pass
+
+            # Extract any cookies sent on the response to the cookiejar
+            # in the new request. Because we've mutated our copied prepared
+            # request, use the old one that we haven't yet touched.
+            prepared_request._cookies.extract_cookies(
+                MockResponse(HTTPHeaderDict(resp.headers)), MockRequest(req))
+            merge_cookies(prepared_request._cookies, self.cookies)
+            prepared_request.prepare_cookies(prepared_request._cookies)
+
+            # Rebuild auth and proxy information.
+            proxies = self.rebuild_proxies(prepared_request, proxies)
+            self.rebuild_auth(prepared_request, resp)
+
+            # Override the original request.
+            req = prepared_request
+            req.adapt_prepare()
+
+            if yield_requests:
+                yield req
+            else:
+                resp = self.send(
+                    req,
+                    stream=stream,
+                    timeout=timeout,
+                    verify=verify,
+                    cert=cert,
+                    proxies=proxies,
+                    allow_redirects=False,
+                    **adapter_kwargs
+                )
+
+                yield resp
+
+                while not resp.done():
+                    yield resp
+                resp = resp.result()
+
+                self.cookies.extract_cookies(
+                    MockResponse(HTTPHeaderDict(resp.headers)), MockRequest(prepared_request))
+
+                # extract redirect url, if any, for the next loop
+                url = self.get_redirect_target(resp)
+
+    def rebuild_proxies(self, prepared_request, proxies):
+        """This method re-evaluates the proxy configuration by considering the
+        environment variables. If we are redirected to a URL covered by
+        NO_PROXY, we strip the proxy configuration. Otherwise, we set missing
+        proxy keys for this URL (in case they were stripped by a previous
+        redirect).
+
+        This method also replaces the Proxy-Authorization header where
+        necessary.
+
+        :rtype: dict
+        """
+        proxies = proxies if proxies is not None else {}
+        headers = prepared_request.headers
+        url = prepared_request.url
+        scheme = urlparse(url).scheme
+        new_proxies = proxies.copy()
+        no_proxy = proxies.get('no_proxy')
+
+        bypass_proxy = should_bypass_proxies(url, no_proxy=no_proxy)
+        # if self.trust_env and not bypass_proxy:
+        #     environ_proxies = get_environ_proxies(url, no_proxy=no_proxy)
+        # 
+        #     proxy = environ_proxies.get(scheme, environ_proxies.get('all'))
+        # 
+        #     if proxy:
+        #         new_proxies.setdefault(scheme, proxy)
+
+        if 'Proxy-Authorization' in headers:
+            del headers['Proxy-Authorization']
+
+        try:
+            username, password = get_auth_from_url(new_proxies[scheme])
+        except KeyError:
+            username, password = None, None
+
+        if username and password:
+            headers['Proxy-Authorization'] = _basic_auth_str(username, password)
+
+        return new_proxies
+
+
+class Session(SessionRedirectMixin):
     """A Trip session.
 
     Provides cookie persistence, and configuration.
@@ -59,10 +214,16 @@ class Session(_Session):
         self.stream = False
         self.verify = True
         self.cert = None
-        # self.max_redirects = DEFAULT_REDIRECT_LIMIT
+        self.max_redirects = DEFAULT_REDIRECT_LIMIT
         self.trust_env = True
         self.cookies = cookiejar_from_dict({})
         self.adapter = HTTPAdapter()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
 
     def prepare_request(self, request):
         cookies = request.cookies or {}
@@ -96,7 +257,7 @@ class Session(_Session):
         )
         return p
 
-    def prepare_response(self, req, resp, **kwargs):
+    def prepare_response(self, req, resp):
         """Builds a :class:`Response <trip.Response>` object from a tornado
         response. This should not be called from user code, and is only exposed
         for use when subclassing the
@@ -136,9 +297,6 @@ class Session(_Session):
 
         response.request = req
         # response.connection = self
-
-        # Response manipulation hooks
-        response = dispatch_hook('response', req.hooks, response, **kwargs)
 
         return response
 
@@ -253,26 +411,63 @@ class Session(_Session):
 
         return self.request('DELETE', url, **kwargs)
 
-    def send(self, request, **kwargs):
+    @gen.coroutine
+    def send(self, req, **kwargs):
         """Send a given PreparedRequest.
 
         :rtype: trip.gen.Future
         """
 
-        if not isinstance(request, PreparedRequest):
+        if not isinstance(req, PreparedRequest):
             raise ValueError('You can only send PreparedRequests.')
 
-        future = Future()
-
-        def handle_future(f):
-            response = self.prepare_response(request, f.result(), **kwargs)
-            future.set_result(response)
-
         allow_redirects = kwargs.pop('allow_redirects', True)
-        resp = self.adapter.send(request, **kwargs)
-        resp.add_done_callback(handle_future)
+        start_time = preferred_clock()
 
-        return future
+        r = yield self.adapter.send(req, **kwargs)
+        r = self.prepare_response(req, r)
+
+        r.elapsed = timedelta(seconds=(preferred_clock()-start_time))
+
+        # Response manipulation hooks
+        r = dispatch_hook('response', req.hooks, r, **kwargs)
+
+        # Persist cookies
+        if r.history:
+            # If the hooks create history then we want those cookies too
+            for resp in r.history:
+                self.cookies.extract_cookies(
+                    MockResponse(HTTPHeaderDict(resp.headers)), MockRequest(resp.request))
+
+        self.cookies.extract_cookies(
+            MockResponse(HTTPHeaderDict(r.headers)), MockRequest(req))
+
+        # Redirect resolving generator.
+        redirect_gen = self.resolve_redirects(r, req, **kwargs)
+
+        # Resolve redirects if allowed.
+        history = []
+        if allow_redirects:
+            for resp in redirect_gen:
+                resp = yield resp
+                history.append(resp)
+
+        # Shuffle things around if there's history.
+        if history:
+            # Insert the first (original) request at the start
+            history.insert(0, r)
+            # Get the last request made
+            r = history.pop()
+            r.history = history
+
+        # If redirects aren't being followed, store the response on the Request for Response.next().
+        if not allow_redirects:
+            try:
+                r._next = next(self.resolve_redirects(r, req, yield_requests=True, **kwargs))
+            except StopIteration:
+                pass
+
+        raise gen.Return(r)
 
     def merge_environment_settings(self, url, proxies, stream, verify, cert):
         """

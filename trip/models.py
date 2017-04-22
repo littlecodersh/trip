@@ -14,8 +14,9 @@ from requests.models import (
     Response as _Response,
     ITER_CHUNK_SIZE, CONTENT_CHUNK_SIZE)
 from requests.compat import (
-    urlparse, urlsplit, chardet, str as _str,
-    json as complexjson)
+    urlparse, urlsplit, chardet,
+    str as _str, json as complexjson)
+from requests.cookies import _copy_cookie_jar
 from requests.utils import iter_slices, guess_json_utf
 
 from tornado import gen
@@ -168,6 +169,10 @@ class PreparedRequest(_PreparedRequest):
 
         _PreparedRequest.prepare(self, method, url, headers, files, data,
             params, auth, cookies, hooks, json)
+        self.adapt_prepare()
+
+    def adapt_prepare(self):
+        """Prepares the special trip parameters."""
 
         parsed = urlsplit(self.url)
         if parsed.scheme not in ('http', 'https'):
@@ -196,6 +201,17 @@ class PreparedRequest(_PreparedRequest):
             self.headers['Connection'] = 'close'
         if 'Host' not in self.headers:
             self.headers['Host'] = self.host
+
+    def copy(self):
+        p = PreparedRequest()
+        p.method = self.method
+        p.url = self.url
+        p.headers = self.headers.copy() if self.headers is not None else None
+        p._cookies = _copy_cookie_jar(self._cookies)
+        p.body = self.body
+        p.hooks = self.hooks
+        p._body_position = self._body_position
+        return p
 
 
 class Response(_Response):
