@@ -17,7 +17,8 @@ from requests.compat import (
     urlparse, urlsplit, chardet,
     str as _str, json as complexjson)
 from requests.cookies import _copy_cookie_jar
-from requests.utils import iter_slices, guess_json_utf
+from requests.utils import (
+    iter_slices, guess_json_utf, default_headers)
 
 from tornado import gen
 from tornado.concurrent import Future
@@ -153,14 +154,14 @@ class PreparedRequest(_PreparedRequest):
     """
     def __init__(self):
         _PreparedRequest.__init__(self)
+        self.headers = default_headers()
+        self.ssl_options = None
+
         self.host = None
         self.port = None
-        self.ssl_options = None
         self.af = None
         self.decompress = None
         self.start_line = None
-        self.headers = None
-        self.body = None
 
     def prepare(self,
             method=None, url=None, headers=None, files=None, data=None,
@@ -183,8 +184,6 @@ class PreparedRequest(_PreparedRequest):
         self.host, self.port = split_host_and_port(netloc)
         if self.port is None:
             self.port = 443 if parsed.scheme == 'https' else 80
-
-        self.ssl_options = None
 
         self.af = AF_INET
 

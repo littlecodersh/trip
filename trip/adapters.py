@@ -12,6 +12,7 @@ The following is the connections between Trip and Tornado:
     
 """
 
+import os, sys
 from io import BytesIO
 from socket import AF_INET, AF_UNSPEC
 
@@ -30,8 +31,10 @@ from tornado.netutil import Resolver, OverrideResolver
 from tornado.tcpclient import TCPClient
 
 from requests.adapters import BaseAdapter
+from requests.compat import urlsplit
 from requests.models import PreparedRequest, Response
-from requests.utils import get_encoding_from_headers
+from requests.utils import (
+    get_encoding_from_headers, DEFAULT_CA_BUNDLE_PATH)
 
 
 class HTTPAdapter(BaseAdapter):
@@ -95,7 +98,7 @@ class HTTPAdapter(BaseAdapter):
         s = yield self.tcp_client.connect(
             request.host, request.port,
             af=request.af,
-            ssl_options=request.ssl_options,
+            ssl_options=self._get_ssl_options(request, verify, cert),
             max_buffer_size=self.max_buffer_size)
         s.set_nodelay(True)
 
@@ -127,6 +130,75 @@ class HTTPAdapter(BaseAdapter):
 
         resp = yield future
         raise gen.Return(resp)
+
+    def _get_ssl_options(self, req, verify, cert):
+        if urlsplit(req.url).scheme == "https":
+            # If we are using the defaults, don't construct a new SSLContext.
+            if req.ssl_options is not None:
+                return req.ssl_options
+            # deal with verify & cert
+            ssl_options = {}
+
+            if verify:
+                cert_loc = None
+
+                # Allow self-specified cert location.
+                if verify is not True:
+                    cert_loc = verify
+
+                if not cert_loc:
+                    cert_loc = DEFAULT_CA_BUNDLE_PATH
+
+                if not cert_loc or not os.path.exists(cert_loc):
+                    raise IOError("Could not find a suitable TLS CA certificate bundle, "
+                                  "invalid path: {0}".format(cert_loc))
+
+                # you may change this to avoid server's certificate check
+                ssl_options["cert_reqs"] = 2 # ssl.CERT_REQUIRED
+                ssl_options["ca_certs"] = cert_loc
+
+            if cert:
+                if not isinstance(cert, basestring):
+                    cert_file = cert[0]
+                    key_file = cert[1]
+                else:
+                    cert_file = cert
+                    key_file = None
+
+                if cert_file and not os.path.exists(cert_file):
+                    raise IOError("Could not find the TLS certificate file, "
+                                  "invalid path: {0}".format(conn.cert_file))
+                if key_file and not os.path.exists(key_file):
+                    raise IOError("Could not find the TLS key file, "
+                                  "invalid path: {0}".format(conn.key_file))
+
+                if key_file is not None:
+                    ssl_options["keyfile"] = key_file
+                if cert_file is not None:
+                    ssl_options["certfile"] = cert_file
+
+            # SSL interoperability is tricky.  We want to disable
+            # SSLv2 for security reasons; it wasn't disabled by default
+            # until openssl 1.0.  The best way to do this is to use
+            # the SSL_OP_NO_SSLv2, but that wasn't exposed to python
+            # until 3.2.  Python 2.7 adds the ciphers argument, which
+            # can also be used to disable SSLv2.  As a last resort
+            # on python 2.6, we set ssl_version to TLSv1.  This is
+            # more narrow than we'd like since it also breaks
+            # compatibility with servers configured for SSLv3 only,
+            # but nearly all servers support both SSLv3 and TLSv1:
+            # http://blog.ivanristic.com/2011/09/ssl-survey-protocol-support.html
+            if (2, 7) <= sys.version_info:
+                # In addition to disabling SSLv2, we also exclude certain
+                # classes of insecure ciphers.
+                ssl_options["ciphers"] = "DEFAULT:!SSLv2:!EXPORT:!DES"
+            else:
+                # This is really only necessary for pre-1.0 versions
+                # of openssl, but python 2.6 doesn't expose version
+                # information.
+                ssl_options["ssl_version"] = 3 # ssl.PROTOCOL_TLSv1
+            return ssl_options
+        return None
 
     def close(self):
         """Cleans up adapter specific items."""
