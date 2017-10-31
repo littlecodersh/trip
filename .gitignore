@@ -1,6 +1,6 @@
 build/*
 dist/*
-test/*
+tests/*
 trip.egg-info/*
 *.pyc
 *.swp

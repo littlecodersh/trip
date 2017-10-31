@@ -10,15 +10,11 @@ Trip: Async HTTP for Humans
 .. image:: https://img.shields.io/pypi/pyversions/trip.svg
     :target: https://pypi.python.org/pypi/trip
 
-.. image:: https://codecov.io/github/requests/requests/coverage.svg?branch=master
-    :target: https://codecov.io/github/requests/requests
-    :alt: codecov.io
-
-.. image:: https://img.shields.io/github/contributors/requests/requests.svg
-    :target: https://github.com/requests/requests/graphs/contributors
-
 .. image:: https://img.shields.io/badge/Say%20Thanks-!-1EAEDB.svg
     :target: https://saythanks.io/to/littlecodersh
+
+.. image:: https://github.com/littlecodersh/trip/blob/master/README.md
+    :target: https://img.shields.io/badge/chinese---%3E-yellow.svg
 
 Trip is an async HTTP library for Python, network blocking will no longer bother you.
 
@@ -39,13 +35,13 @@ With Trip, you may finish
 `one hundred requests in one piece of time <https://gist.github.com/littlecodersh/6803d2c3382de9a7793a0189db72f538>`_.
 
 Trip gets its name from two powerful site packages and aims to combine them together.
-Trip refers to 'Tornado & Requests Is Paired', TRIP.
+Trip refers to 'Tornado & Requests In Pair', TRIP.
 To put them together, I reused much of their codes about structure and dealing.
-Actually I only made little effert to make a mixture. Thanks to 
+Actually I only made little effort to make a mixture. Thanks to 
 `Tornado <https://github.com/tornadoweb/tornado>`_ and 
 `Requests <https://github.com/requests/requests>`_.
 
-Through using Trip, you may take full advantages of Requests, including:
+Through using Trip, you may take full advantage of Requests, including:
 Sessions with Cookie persistence, browser-style SSL verification, automatic content decoding,
 basic/digest authentication, elegant key/value Cookies.
 Meanwhile, your requests are coroutine like using AsyncHTTPClient of Tornado, network blocking will

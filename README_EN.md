@@ -1,8 +1,9 @@
 # Trip: Async HTTP for Humans
 
-[![pypi][pypi-image]][pypi] ![py27][py27] ![py35][py35]
+[![pypi][pypi-image]][pypi]
+[![][pyversion-image]][pypi]
 [![][thanks-image]][thanks]
-[Chinese version][chinese-version]
+[![][chinese-image]][chinese]
 
 Trip is an async HTTP library for Python, network blocking will no longer bother you.
 
@@ -22,12 +23,12 @@ trip.run(main)
 With Trip, you may finish [one hundred requests in one piece of time][demo].
 
 Trip gets its name from two powerful site packages and aims to combine them together.
-Trip refers to 'Tornado & Requests Is Paired', TRIP.
+Trip refers to 'Tornado & Requests In Pair', TRIP.
 To put them together, I reused much of their codes about structure and dealing.
-Actually I only made little effert to make a mixture. Thanks to [Tornado][tornado] 
+Actually I only made little effort to make a mixture. Thanks to [Tornado][tornado] 
 and [Requests][requests].
 
-Through using Trip, you may take full advantages of Requests, including:
+Through using Trip, you may take full advantage of Requests, including:
 Sessions with Cookie persistence, browser-style SSL verification, automatic content decoding,
 basic/digest authentication, elegant key/value Cookies.
 Meanwhile, your requests are coroutine like using AsyncHTTPClient of Tornado, network blocking will
@@ -110,11 +111,11 @@ trip.run(main)
 3. Please write demo codes of bugs or new features. You know, codes help.
 4. Finally if you finish your work and make a pull request, I will merge it in time after essential tests.
 
-[py27]: https://img.shields.io/badge/python-2.7-ff69b4.svg
-[py35]: https://img.shields.io/badge/python-3.5-red.svg
+[pyversion-image]: https://img.shields.io/pypi/pyversions/trip.svg
 [pypi]: https://pypi.python.org/pypi/trip
 [pypi-image]: https://img.shields.io/pypi/v/trip.svg
-[chinese-version]: https://github.com/littlecodersh/trip/blob/master/README.md
+[chinese]: https://github.com/littlecodersh/trip/blob/master/README.md
+[chinese-image]: https://img.shields.io/badge/chinese---%3E-yellow.svg
 [thanks]: https://saythanks.io/to/littlecodersh
 [thanks-image]: https://img.shields.io/badge/Say%20Thanks-!-1EAEDB.svg
 [demo]: https://gist.github.com/littlecodersh/6803d2c3382de9a7793a0189db72f538

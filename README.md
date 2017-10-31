@@ -1,8 +1,9 @@
 # Trip: 让协程与网络服务人类
 
-[![pypi][pypi-image]][pypi] ![py27][py27] ![py35][py35]
+[![pypi][pypi-image]][pypi]
+[![][pyversion-image]][pypi]
 [![][thanks-image]][thanks]
-[English version][english-version]
+[![][english-image]][english]
 
 Trip 是一个协程的网络库，使用如Requests一般简单的操作就可以让网络延时不再阻塞你的程序。
 
@@ -21,7 +22,7 @@ trip.run(main)
 
 有了协程，同样的代码量，[一百份请求一份时间][demo]。
 
-Trip的名字来源于其两个依赖包，也旨在将两个包的内容融合起来：'Tornado & Requests Is Paired'。
+Trip的名字来源于其两个依赖包，也旨在将两个包的内容融合起来：'Tornado & Requests In Pair'。
 在兼容中使用了大量上述两个包结构和处理的代码，我只是做了一些简单的整合工作，感谢
 [Tornado][tornado]与[Requests][requests]让我能如此轻易的完成本项目的编写。
 
@@ -109,11 +110,11 @@ trip.run(main)
 3. 请务必带上出现问题或者新功能的相关代码，这会给我们的交流带来巨大的帮助。
 4. 最后如果你完成了修改可以通过pull request的方式提交，我会尽快完成测试并合并。
 
-[py27]: https://img.shields.io/badge/python-2.7-ff69b4.svg
-[py35]: https://img.shields.io/badge/python-3.5-red.svg
+[pyversion-image]: https://img.shields.io/pypi/pyversions/trip.svg
 [pypi]: https://pypi.python.org/pypi/trip
 [pypi-image]: https://img.shields.io/pypi/v/trip.svg
-[english-version]: https://github.com/littlecodersh/trip/blob/master/README_EN.md
+[english]: https://github.com/littlecodersh/trip/blob/master/README_EN.md
+[english-image]: https://img.shields.io/badge/english---%3E-yellow.svg
 [thanks]: https://saythanks.io/to/littlecodersh
 [thanks-image]: https://img.shields.io/badge/Say%20Thanks-!-1EAEDB.svg
 [demo]: https://gist.github.com/littlecodersh/6803d2c3382de9a7793a0189db72f538
