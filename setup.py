@@ -9,11 +9,12 @@ from os import path
 import trip
 
 here = path.abspath(path.dirname(__file__))
+about = {}
 
 with open(path.join(here, 'README.rst'), encoding='utf-8') as f:
     long_description = f.read()
 
-with open(os.path.join(here, 'trip', '__version__.py'), 'r', 'utf-8') as f:
+with open(path.join(here, 'trip', '__version__.py'), 'r', 'utf-8') as f:
     exec(f.read(), about)
 
 setup(
@@ -42,7 +43,7 @@ setup(
         'Programming Language :: Python :: 3',
     ],
 
-    keywords='',
+    keywords='coroutine requests http spider',
 
     # You can just specify the packages manually here if your project is
     # simple. Or you can use find_packages().
