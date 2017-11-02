@@ -103,6 +103,19 @@ def main():
 trip.run(main)
 ```
 
+**超时**
+
+```python
+import trip
+
+@trip.coroutine
+def main():
+    r = yield trip.get('http://github.com', timeout=0.001)
+    print(r)
+
+trip.run(main)
+```
+
 ## 如何贡献代码
 
 1. 你可以开启issue与我交流你的想法。

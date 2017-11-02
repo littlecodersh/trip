@@ -104,6 +104,19 @@ def main():
 trip.run(main)
 ```
 
+**Timeouts**
+
+```python
+import trip
+
+@trip.coroutine
+def main():
+    r = yield trip.get('http://github.com', timeout=0.001)
+    print(r)
+
+trip.run(main)
+```
+
 ## How to contribute
 
 1. You may open an issue to share your ideas with me.
