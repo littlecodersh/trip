@@ -12,11 +12,11 @@ The following is the connections between Trip and Tornado:
     
 """
 
-import os, sys
+import os, sys, functools
 from io import BytesIO
 from socket import AF_INET, AF_UNSPEC
 
-from tornado import gen
+from tornado import gen, stack_context
 from tornado.concurrent import Future
 from tornado.http1connection import (
     HTTP1Connection, HTTP1ConnectionParameters,
@@ -32,6 +32,7 @@ from tornado.tcpclient import TCPClient
 
 from requests.adapters import BaseAdapter
 from requests.compat import urlsplit
+from requests.exceptions import Timeout
 from requests.models import PreparedRequest, Response
 from requests.utils import (
     get_encoding_from_headers, DEFAULT_CA_BUNDLE_PATH)
@@ -95,12 +96,38 @@ class HTTPAdapter(BaseAdapter):
         :param proxies: (optional) The proxies dictionary to apply to the request.
         :rtype: trip.adapters.MessageDelegate
         """
+        if isinstance(timeout, tuple):
+            try:
+                connect_timeout, read_timeout = timeout
+            except ValueError as e:
+                # this may raise a string formatting error.
+                err = ("Invalid timeout {0}. Pass a (connect, read) "
+                       "timeout tuple, or a single float to set "
+                       "both timeouts to the same value".format(timeout))
+                raise ValueError(err)
+        else:
+            connect_timeout, read_timeout = timeout, timeout
+
+        timeout_reason = {}
+        if connect_timeout:
+            timeout_reason['reason'] = 'while connecting'
+            self.io_loop.add_timeout(
+                self.io_loop.time() + connect_timeout,
+                stack_context.wrap(functools.partial(self._on_timeout, timeout_reason)))
+
         s = yield self.tcp_client.connect(
             request.host, request.port,
             af=request.af,
             ssl_options=self._get_ssl_options(request, verify, cert),
             max_buffer_size=self.max_buffer_size)
-        s.set_nodelay(True)
+
+        if not timeout_reason or timeout_reason.get('reason'):
+            s.set_nodelay(True)
+            timeout_reason.clear()
+        else:
+            raise gen.Return(Timeout(
+                timeout_reason.get('error', 'unknown'),
+                request=request))
 
         connection = HTTPConnection(
             s,
@@ -109,6 +136,12 @@ class HTTPAdapter(BaseAdapter):
                 max_header_size=self.max_header_size,
                 max_body_size=self.max_body_size,
                 decompress=request.decompress))
+
+        if read_timeout:
+            timeout_reason['reason'] = 'during request'
+            self.io_loop.add_timeout(
+                self.io_loop.time() + connect_timeout,
+                stack_context.wrap(functools.partial(self._on_timeout, timeout_reason)))
 
         connection.write_headers(request.start_line, request.headers)
         if request.body is not None:
@@ -128,8 +161,14 @@ class HTTPAdapter(BaseAdapter):
         if not stream and headers_received:
             yield connection.read_body(resp)
 
-        resp = yield future
-        raise gen.Return(resp)
+        if not timeout_reason or timeout_reason.get('reason'):
+            timeout_reason.clear()
+            resp = yield future
+            raise gen.Return(resp)
+        else:
+            raise gen.Return(Timeout(
+                timeout_reason.get('error', 'unknown'),
+                request=request))
 
     def _get_ssl_options(self, req, verify, cert):
         if urlsplit(req.url).scheme == "https":
@@ -199,6 +238,18 @@ class HTTPAdapter(BaseAdapter):
                 ssl_options["ssl_version"] = 3 # ssl.PROTOCOL_TLSv1
             return ssl_options
         return None
+
+    def _on_timeout(self, info=None):
+        """Timeout callback.
+
+        Raise a timeout HTTPError when a timeout occurs.
+
+        :info string key: More detailed timeout information.
+        """
+        if info:
+            reason = info.get('reason', 'unknown')
+            info.clear()
+            info['error'] = 'Timeout {0}'.format(reason)
 
     def close(self):
         """Cleans up adapter specific items."""

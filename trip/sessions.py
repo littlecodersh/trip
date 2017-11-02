@@ -425,7 +425,11 @@ class Session(SessionRedirectMixin):
         start_time = preferred_clock()
 
         r = yield self.adapter.send(req, **kwargs)
-        r = self.prepare_response(req, r)
+
+        if isinstance(r, Exception):
+            raise gen.Return(r)
+        else:
+            r = self.prepare_response(req, r)
 
         r.elapsed = timedelta(seconds=(preferred_clock()-start_time))
 

@@ -49,6 +49,9 @@ python -m pip install trip
 
 你可以在[这里][document]找到本项目详细的文档。
 
+如果在阅读文档过程当中遇到了问题，
+也可以加入qq群与我们讨论：462703741。
+
 
 ## 进阶应用
 
@@ -99,6 +102,19 @@ def main():
     url = 'http://httpbin.org/get'
     r = yield trip.get('http://httpbin.org', hooks={'response': [print_url, record_hook]})
     print(r.hook_called)
+
+trip.run(main)
+```
+
+**超时**
+
+```python
+import trip
+
+@trip.coroutine
+def main():
+    r = yield trip.get('http://github.com', timeout=0.001)
+    print(r)
 
 trip.run(main)
 ```
