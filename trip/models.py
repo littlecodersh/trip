@@ -6,7 +6,9 @@ This module contains the primary objects that power Trip.
 """
 
 import codecs
-from socket import AF_INET, AF_UNSPEC
+import functools
+import socket
+from socket import AF_INET
 
 from requests.models import (
     PreparedRequest as _PreparedRequest,
@@ -19,8 +21,9 @@ from requests.compat import (
 from requests.cookies import _copy_cookie_jar
 from requests.utils import (
     iter_slices, guess_json_utf, default_headers)
+from requests.exceptions import StreamConsumedError
 
-from tornado import gen
+from tornado import gen, httputil, stack_context
 from tornado.concurrent import Future
 from tornado.httpclient import HTTPRequest
 from tornado.httputil import (split_host_and_port,
