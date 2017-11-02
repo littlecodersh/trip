@@ -14,16 +14,13 @@ The following is the connections between Trip and Tornado:
 
 import os, sys, functools
 from io import BytesIO
-from socket import AF_INET, AF_UNSPEC
 
 from tornado import gen, stack_context
 from tornado.concurrent import Future
 from tornado.http1connection import (
     HTTP1Connection, HTTP1ConnectionParameters,
     _ExceptionLoggingContext, _GzipMessageDelegate)
-from tornado.httputil import (
-    RequestStartLine, HTTPMessageDelegate,
-    HTTPInputError, parse_response_start_line)
+from tornado.httputil import HTTPMessageDelegate, HTTPInputError, parse_response_start_line
 from tornado.ioloop import IOLoop
 from tornado.iostream import StreamClosedError
 from tornado.log import app_log, gen_log
@@ -32,10 +29,8 @@ from tornado.tcpclient import TCPClient
 
 from requests.adapters import BaseAdapter
 from requests.compat import urlsplit
-from requests.exceptions import Timeout
-from requests.models import PreparedRequest, Response
-from requests.utils import (
-    get_encoding_from_headers, DEFAULT_CA_BUNDLE_PATH)
+from requests.exceptions import Timeout, HTTPError
+from requests.utils import DEFAULT_CA_BUNDLE_PATH
 
 
 class HTTPAdapter(BaseAdapter):
@@ -63,7 +58,7 @@ class HTTPAdapter(BaseAdapter):
       >>> s.mount('http://', a)
     """
 
-    def __init__(self, io_loop=None, hostname_mapping=None, 
+    def __init__(self, io_loop=None, hostname_mapping=None,
             max_buffer_size=104857600, max_header_size=None,
             max_body_size=None):
         super(HTTPAdapter, self).__init__()
@@ -323,7 +318,7 @@ class HTTPConnection(HTTP1Connection):
                 # TODO: client delegates will get headers_received twice
                 # in the case of a 100-continue.  Document or change?
                 yield self.read_headers(delegate)
-            
+
             # return the response with no body set
             with _ExceptionLoggingContext(app_log):
                 delegate.finish()

@@ -5,7 +5,7 @@ trip.models
 This module contains the primary objects that power Trip.
 """
 
-import codecs
+import functools, codecs
 from socket import AF_INET, AF_UNSPEC
 
 from requests.models import (
@@ -19,8 +19,9 @@ from requests.compat import (
 from requests.cookies import _copy_cookie_jar
 from requests.utils import (
     iter_slices, guess_json_utf, default_headers)
+from requests.exceptions import StreamConsumedError
 
-from tornado import gen
+from tornado import gen, stack_context
 from tornado.concurrent import Future
 from tornado.httpclient import HTTPRequest
 from tornado.httputil import (split_host_and_port,
@@ -110,7 +111,7 @@ class Request(_Request):
         netloc = self.parsed.netloc
         if "@" in netloc:
             userpass, _, netloc = netloc.rpartition("@")
-        host, port = httputil.split_host_and_port(netloc)
+        host, port = split_host_and_port(netloc)
         if port is None:
             port = 443 if self.parsed.scheme == "https" else 80
         if re.match(r'^\[.*\]$', host):
@@ -119,9 +120,9 @@ class Request(_Request):
         self.parsed_hostname = host  # save final host for _on_connect
 
         if request.allow_ipv6 is False:
-            af = socket.AF_INET
+            af = AF_INET
         else:
-            af = socket.AF_UNSPEC
+            af = AF_UNSPEC
 
         ssl_options = self._get_ssl_options(self.parsed.scheme)
 

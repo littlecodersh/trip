@@ -6,7 +6,6 @@ This module provides a Session object to manage and persist settings across
 trip (cookies, auth, proxies).
 """
 
-from functools import partial
 from datetime import timedelta
 
 import requests
@@ -14,7 +13,7 @@ from requests.auth import _basic_auth_str
 from requests.compat import (cookielib, urljoin, urlparse)
 from requests.cookies import (
     cookiejar_from_dict, merge_cookies, RequestsCookieJar,
-    extract_cookies_to_jar, MockRequest, MockResponse)
+    MockRequest, MockResponse)
 from requests.exceptions import TooManyRedirects
 from requests.hooks import default_hooks, dispatch_hook
 from requests.models import DEFAULT_REDIRECT_LIMIT
@@ -26,13 +25,11 @@ from requests.status_codes import codes
 from requests.structures import CaseInsensitiveDict
 from requests.utils import (
     get_auth_from_url, get_encoding_from_headers,
-    get_netrc_auth, requote_uri, should_bypass_proxies)
+    requote_uri, should_bypass_proxies)
 from requests._internal_utils import to_native_string
 from urllib3._collections import HTTPHeaderDict
 
-import tornado
 from tornado import gen
-from tornado.httpclient import AsyncHTTPClient
 from tornado.concurrent import Future
 
 from .adapters import HTTPAdapter

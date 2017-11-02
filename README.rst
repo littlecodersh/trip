@@ -65,7 +65,7 @@ Paste it into your console and enjoy:
 Documents
 ---------
 
-Documents are here: http://trip.readthedocs.io/zh/latest/
+Documents are here: http://trip.readthedocs.io/
 
 
 Advanced usage

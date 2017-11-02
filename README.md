@@ -136,5 +136,5 @@ trip.run(main)
 [demo]: https://gist.github.com/littlecodersh/6803d2c3382de9a7793a0189db72f538
 [tornado]: https://github.com/tornadoweb/tornado
 [requests]: https://github.com/requests/requests
-[document]: http://trip.readthedocs.io/zh/latest/
+[document]: http://trip.readthedocs.io/
 [homepage]: http://github.com/littlecodersh/trip
