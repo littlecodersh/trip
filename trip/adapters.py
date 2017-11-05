@@ -14,6 +14,7 @@ The following is the connections between Trip and Tornado:
 
 import os, sys, functools
 from io import BytesIO
+from weakref import ref
 
 from tornado import gen, stack_context
 from tornado.concurrent import Future
@@ -259,9 +260,12 @@ class HTTPConnection(HTTP1Connection):
         HTTP1Connection.__init__(self, stream, True, params)
 
     def _parse_delegate(self, delegate):
-        if self.params.decompress:
-            return delegate, _GzipMessageDelegate(delegate, self.params.chunk_size)
-        return delegate, delegate
+        if not hasattr(delegate, '_delegate'):
+            if self.params.decompress:
+                delegate._delegate = GzipMessageDelegate(delegate, self.params.chunk_size)
+            else:
+                delegate._delegate = None
+        return delegate, delegate._delegate or delegate
 
     @gen.coroutine
     def read_headers(self, delegate):
@@ -524,3 +528,16 @@ class MessageDelegate(HTTPMessageDelegate):
             final_callback = self.final_callback
             self.final_callback = None
             self.io_loop.add_callback(final_callback, response)
+
+
+class GzipMessageDelegate(_GzipMessageDelegate):
+    """Wraps an `HTTPMessageDelegate` to decode ``Content-Encoding: gzip``.
+    rewrite to avoid circle reference
+    """
+    @property
+    def _delegate(self):
+        return self._delegate_ref()
+
+    @_delegate.setter
+    def _delegate(self, value):
+        self._delegate_ref = ref(value)

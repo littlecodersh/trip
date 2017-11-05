@@ -49,7 +49,10 @@ setup(
     # simple. Or you can use find_packages().
     packages=find_packages(),
 
-    install_requires=['requests', 'tornado'],
+    install_requires=[
+        'requests>=2.18.4',
+        'tornado>=4.5.2'
+    ],
 
     # List additional groups of dependencies here
     extras_require={},

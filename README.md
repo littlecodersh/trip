@@ -1,13 +1,13 @@
-# Trip: 让协程与网络服务人类
+# Trip: Async HTTP for Humans
 
 [![pypi][pypi-image]][pypi]
 [![][pyversion-image]][pypi]
 [![][thanks-image]][thanks]
-[![][english-image]][english]
+[![][chinese-image]][chinese]
 
-Trip 是一个协程的网络库，使用如Requests一般简单的操作就可以让网络延时不再阻塞你的程序。
+Trip is an async HTTP library for Python, network blocking will no longer bother you.
 
-Python的协程可以这么简单（兼容Python 2.7-3.7）：
+Coroutine in python 2.7+ can be this simple:
 
 ```python
 import trip
@@ -20,44 +20,42 @@ def main():
 trip.run(main)
 ```
 
-有了协程，同样的代码量，[一百份请求一份时间][demo]。
+With Trip, you may finish [one hundred requests in one piece of time][demo].
 
-Trip的名字来源于其两个依赖包，也旨在将两个包的内容融合起来：'Tornado & Requests In Pair'。
-在兼容中使用了大量上述两个包结构和处理的代码，我只是做了一些简单的整合工作，感谢
-[Tornado][tornado]与[Requests][requests]让我能如此轻易的完成本项目的编写。
+Trip gets its name from two powerful site packages and aims to combine them together.
+Trip refers to 'Tornado & Requests In Pair', TRIP.
+To put them together, I reused much of their codes about structure and dealing.
+Actually I only made little effort to make a mixture. Thanks to [Tornado][tornado] 
+and [Requests][requests].
 
+Through using Trip, you may take full advantage of Requests, including:
+Sessions with Cookie persistence, browser-style SSL verification, automatic content decoding,
+basic/digest authentication, elegant key/value Cookies.
+Meanwhile, your requests are coroutine like using AsyncHTTPClient of Tornado, network blocking will
+not be a problem.
 
-通过使用Trip，你可以充分使用Requests的各种特性，包括但不限于：带持久 Cookie 的会话、
-浏览器式的 SSL 认证、自动内容解码、 基本/摘要式的身份认证、 优雅的 key/value Cookie。
-同时你的请求又和使用Tornado的AsyncHTTPClient一般是协程的，网络延时不再会阻塞你的
-程序，在程序正常运行的时候你可以同时等待多项任务的完成。
+Found difficult optimizing spiders' time consuming?
+Found tricky using asyncio http packages?
+Found heavy custimizing big spider framework?
+Try Trip, you will not regret!
 
-爬虫耗时太久优化困难吗？各种协程网络框架难以使用吗？大型爬虫框架臃肿无法灵活定制吗？
-试试Trip，你不会后悔的！
+## Installation
 
-无论你是使用的2.7，3.3，3.7，Trip都可以完美运行。
-
-## 安装
-
-安装Trip非常简单，只需要在命令行中输入：
+Paste it into your console and enjoy:
 
 ```bash
 python -m pip install trip
 ```
 
-## 文档
+## Documents
 
-你可以在[这里][document]找到本项目详细的文档。
+Documents are here: [http://trip.readthedocs.io/zh/latest/][document]
 
-如果在阅读文档过程当中遇到了问题，
-也可以加入qq群与我们讨论：462703741。
+## Advanced usage
 
+Some of the advaced features are listed here:
 
-## 进阶应用
-
-这里展示部分的进阶应用：
-
-**使用async与await**
+**Using async and await in python 3**
 
 ```python
 import trip
@@ -69,7 +67,7 @@ async def main():
 trip.run(main)
 ```
 
-**Cookie的持久化**
+**Sessions with Cookie persistence**
 
 ```python
 import trip
@@ -87,7 +85,7 @@ def main():
 trip.run(main)
 ```
 
-**事件挂钩**
+**Event hooks**
 
 ```python
 import trip
@@ -106,7 +104,7 @@ def main():
 trip.run(main)
 ```
 
-**超时**
+**Timeouts**
 
 ```python
 import trip
@@ -119,18 +117,25 @@ def main():
 trip.run(main)
 ```
 
-## 如何贡献代码
+## How to contribute
 
-1. 你可以开启issue与我交流你的想法。
-2. 或者fork这个[项目][homepage]并在 **master** 分支上进行你的修改。
-3. 请务必带上出现问题或者新功能的相关代码，这会给我们的交流带来巨大的帮助。
-4. 最后如果你完成了修改可以通过pull request的方式提交，我会尽快完成测试并合并。
+1. You may open an issue to share your ideas with me.
+2. Or fork this [project][homepage] and do it your own on **master** branch.
+3. Please write demo codes of bugs or new features. You know, codes help.
+4. Finally if you finish your work and make a pull request, I will merge it in time after essential tests.
+
+## Similiar projects
+
+* [curequests][curequests]: Curio + Requests, Async HTTP for Humans.
+* [grequests][grequests]: Gevent + Requests.
+* [requests-threads][requests-threads]: Twisted Deferred Thread backend for Requests.
+* [requests-futures][requests-futures]: Asynchronous Python HTTP Requests for Humans using Futures.
 
 [pyversion-image]: https://img.shields.io/pypi/pyversions/trip.svg
 [pypi]: https://pypi.python.org/pypi/trip
 [pypi-image]: https://img.shields.io/pypi/v/trip.svg
-[english]: https://github.com/littlecodersh/trip/blob/master/README_EN.md
-[english-image]: https://img.shields.io/badge/english---%3E-yellow.svg
+[chinese]: https://github.com/littlecodersh/trip/blob/master/README_CN.md
+[chinese-image]: https://img.shields.io/badge/中文---%3E-yellow.svg
 [thanks]: https://saythanks.io/to/littlecodersh
 [thanks-image]: https://img.shields.io/badge/Say%20Thanks-!-1EAEDB.svg
 [demo]: https://gist.github.com/littlecodersh/6803d2c3382de9a7793a0189db72f538
@@ -138,3 +143,7 @@ trip.run(main)
 [requests]: https://github.com/requests/requests
 [document]: http://trip.readthedocs.io/
 [homepage]: http://github.com/littlecodersh/trip
+[curequests]: https://github.com/guyskk/curequests
+[grequests]: https://github.com/kennethreitz/grequests
+[requests-threads]: https://github.com/requests/requests-threads
+[requests-futures]: https://github.com/ross/requests-futures
