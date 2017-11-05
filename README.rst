@@ -13,8 +13,8 @@ Trip: Async HTTP for Humans
 .. image:: https://img.shields.io/badge/Say%20Thanks-!-1EAEDB.svg
     :target: https://saythanks.io/to/littlecodersh
 
-.. image:: https://github.com/littlecodersh/trip/blob/master/README.md
-    :target: https://img.shields.io/badge/chinese---%3E-yellow.svg
+.. image:: https://img.shields.io/badge/中文---%3E-yellow.svg
+    :target: https://github.com/littlecodersh/trip/blob/master/README_CN.md
 
 Trip is an async HTTP library for Python, network blocking will no longer bother you.
 
