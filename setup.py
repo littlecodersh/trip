@@ -21,7 +21,7 @@ setup(
     name='trip',
 
     version=about['__version__'],
-    description='Async HTTP for humans.',
+    description='Async HTTP for humans, coroutine Requests.',
     long_description=long_description,
 
     url='https://github.com/littlecodersh/trip',

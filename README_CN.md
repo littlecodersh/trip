@@ -5,7 +5,9 @@
 [![][thanks-image]][thanks]
 [![][english-image]][english]
 
-Trip 是一个协程的网络库，使用如Requests一般简单的操作就可以让网络延时不再阻塞你的程序。
+Trip，Tornado & Requests In Pair，一个协程的网络库。
+
+与 Requests 同样的操作，Trip让你摆脱网络延时阻塞程序。
 
 Python的协程可以这么简单（兼容Python 2.7-3.7）：
 
@@ -115,6 +117,24 @@ import trip
 def main():
     r = yield trip.get('http://github.com', timeout=0.001)
     print(r)
+
+trip.run(main)
+```
+
+**代理**
+
+```python
+import trip
+
+proxies = {
+    'http': '127.0.0.1:8080',
+    'https': '127.0.0.1:8081',
+}
+
+@trip.coroutine
+def main():
+    r = yield trip.get('https://httpbin.org/get', proxies=proxies)
+    print(r.content)
 
 trip.run(main)
 ```

@@ -16,7 +16,9 @@ Trip: Async HTTP for Humans
 .. image:: https://img.shields.io/badge/中文---%3E-yellow.svg
     :target: https://github.com/littlecodersh/trip/blob/master/README_CN.md
 
-Trip is an async HTTP library for Python, network blocking will no longer bother you.
+TRIP, Tornado & Requests In Pair, an async HTTP library for Python.
+
+Simple as Requests, Trip let you get rid of annoying network blocking.
 
 Coroutine in python 2.7+ can be this simple:
 
@@ -51,6 +53,7 @@ Found difficult optimizing spiders' time consuming?
 Found tricky using asyncio http packages?
 Found heavy custimizing big spider framework?
 Try Trip, you will not regret!
+
 
 Installation
 ------------
@@ -134,6 +137,25 @@ Timeouts
         print(r)
 
     trip.run(main)
+
+Proxy
+
+.. code-block:: python
+
+    import trip
+
+    proxies = {
+        'http': '127.0.0.1:8080',
+        'https': '127.0.0.1:8081',
+    }
+
+    @trip.coroutine
+    def main():
+        r = yield trip.get('https://httpbin.org/get', proxies=proxies)
+        print(r.content)
+
+    trip.run(main)
+
 
 How to contribute
 -----------------

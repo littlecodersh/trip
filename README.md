@@ -5,7 +5,9 @@
 [![][thanks-image]][thanks]
 [![][chinese-image]][chinese]
 
-Trip is an async HTTP library for Python, network blocking will no longer bother you.
+TRIP, Tornado & Requests In Pair, an async HTTP library for Python.
+
+Simple as Requests, Trip let you get rid of annoying network blocking.
 
 Coroutine in python 2.7+ can be this simple:
 
@@ -113,6 +115,24 @@ import trip
 def main():
     r = yield trip.get('http://github.com', timeout=0.001)
     print(r)
+
+trip.run(main)
+```
+
+**Proxy**
+
+```python
+import trip
+
+proxies = {
+    'http': '127.0.0.1:8080',
+    'https': '127.0.0.1:8081',
+}
+
+@trip.coroutine
+def main():
+    r = yield trip.get('https://httpbin.org/get', proxies=proxies)
+    print(r.content)
 
 trip.run(main)
 ```

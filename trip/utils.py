@@ -1,8 +1,10 @@
 import codecs
 
+from requests.compat import urlsplit
 from requests.structures import CaseInsensitiveDict
 
 from tornado.concurrent import Future
+from tornado.httputil import split_host_and_port
 
 from .__version__ import __version__
 
@@ -54,3 +56,14 @@ def iter_slices_future(r, slice_length, decode_unicode=False):
         future.set_result(chunk)
         yield future
 
+
+def get_host_and_port(url):
+    """ Get host and port from url."""
+    parsed = urlsplit(url)
+    netloc = parsed.netloc
+    if '@' in netloc:
+        userpass, _, netloc = netloc.rpartition('@')
+    host, port = split_host_and_port(netloc)
+    if port is None:
+        port = 443 if parsed.scheme == 'https' else 80
+    return (host, port)

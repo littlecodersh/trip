@@ -12,7 +12,7 @@ The following is the connections between Trip and Tornado:
     
 """
 
-import os, sys, functools
+import os, sys, functools, socket
 from io import BytesIO
 from weakref import ref
 
@@ -21,17 +21,114 @@ from tornado.concurrent import Future
 from tornado.http1connection import (
     HTTP1Connection, HTTP1ConnectionParameters,
     _ExceptionLoggingContext, _GzipMessageDelegate)
-from tornado.httputil import HTTPMessageDelegate, HTTPInputError, parse_response_start_line
+from tornado.httputil import (
+    parse_response_start_line, 
+    HTTPMessageDelegate, HTTPInputError, RequestStartLine)
 from tornado.ioloop import IOLoop
-from tornado.iostream import StreamClosedError
+from tornado.iostream import StreamClosedError, IOStream
 from tornado.log import app_log, gen_log
+from tornado.platform.auto import set_close_exec
 from tornado.netutil import Resolver, OverrideResolver
-from tornado.tcpclient import TCPClient
+from tornado.tcpclient import TCPClient as _TCPClient
 
 from requests.adapters import BaseAdapter
 from requests.compat import urlsplit
 from requests.exceptions import Timeout, HTTPError
-from requests.utils import DEFAULT_CA_BUNDLE_PATH
+from requests.utils import DEFAULT_CA_BUNDLE_PATH, select_proxy
+
+from .compat import BadStatusLine, LineTooLong
+from .utils import get_host_and_port
+
+
+class TCPClient(_TCPClient):
+    """ override tcpclient to enable https proxy. """
+    def _create_stream(self, max_buffer_size, af, addr, source_ip=None,
+               source_port=None):
+        # Always connect in plaintext; we'll convert to ssl if necessary
+        # after one connection has completed.
+        source_port_bind = source_port if isinstance(source_port, int) else 0
+        source_ip_bind = source_ip
+        if source_port_bind and not source_ip:
+            # User required a specific port, but did not specify
+            # a certain source IP, will bind to the default loopback.
+            source_ip_bind = '::1' if af == socket.AF_INET6 else '127.0.0.1'
+            # Trying to use the same address family as the requested af socket:
+            # - 127.0.0.1 for IPv4
+            # - ::1 for IPv6
+        socket_obj = socket.socket(af)
+        set_close_exec(socket_obj.fileno())
+        try:
+            stream = IOStream(socket_obj,
+                              io_loop=self.io_loop,
+                              max_buffer_size=max_buffer_size)
+        except socket.error as e:
+            fu = Future()
+            fu.set_exception(e)
+            return fu
+        else:
+            if source_port_bind or source_ip_bind:
+                @gen.coroutine
+                def _(addr):
+                    r = yield stream.connect((source_ip_bind, source_port_bind))
+                    yield self._connect_tunnel(stream, addr, {})
+                    raise gen.Return(r)
+                return _(addr)
+            else:
+                return stream.connect(addr)
+
+    @gen.coroutine
+    def _connect_tunnel(self, sock, addr, headers):
+        max_line = 65536
+        yield sock.write(('CONNECT %s:%d HTTP/1.0\r\n' % addr).encode())
+        for header, value in headers.items():
+            yield sock.write(('%s: %s\r\n' % (header, value)).encode())
+        yield sock.write(b'\r\n')
+
+        # Initialize with Simple-Response defaults
+        line = yield sock.read_until(b'\r\n', max_bytes=max_line)
+        if not line:
+            # Presumably, the server closed the connection before
+            # sending a valid response.
+            raise BadStatusLine(line)
+        line = line.decode()
+        try:
+            [version, status, reason] = line.split(None, 2)
+        except ValueError:
+            try:
+                [version, status] = line.split(None, 1)
+                reason = ''
+            except ValueError:
+                # empty version will cause next test to fail and status
+                # will be treated as 0.9 response.
+                version = ''
+        if not version.startswith('HTTP/'):
+            version, status, reason = 'HTTP/0.9', 200, ''
+
+        else:
+            try:
+                status = int(status)
+                if status < 100 or status > 999:
+                    raise BadStatusLine(line)
+            except ValueError:
+                raise BadStatusLine(line)
+
+        if version == 'HTTP/0.9':
+            # HTTP/0.9 doesn't support the CONNECT verb, so if httplib has
+            # concluded HTTP/0.9 is being used something has gone wrong.
+            sock.close()
+            raise socket.error('Invalid response from tunnel request')
+        if status != 200:
+            sock.close()
+            raise socket.error('Tunnel connection failed: %d %s' % (status,
+                                                                    reason.strip()))
+        while True:
+            line = yield sock.read_until(b'\r\n', max_bytes=max_line)
+            line = line.decode()
+            if not line:
+                # for sites which EOF without sending trailer
+                break
+            if line == '\r\n':
+                break
 
 
 class HTTPAdapter(BaseAdapter):
@@ -111,11 +208,21 @@ class HTTPAdapter(BaseAdapter):
                 self.io_loop.time() + connect_timeout,
                 stack_context.wrap(functools.partial(self._on_timeout, timeout_reason)))
 
+        proxy = select_proxy(request.url, proxies)
+        if proxy:
+            host, port = (proxy.split(':') + [80])[:2]
+            port = int(port)
+            start_line = RequestStartLine(request.method, request.url, '')
+        else:
+            host, port = None, None
+            start_line = request.start_line
+
         s = yield self.tcp_client.connect(
             request.host, request.port,
             af=request.af,
             ssl_options=self._get_ssl_options(request, verify, cert),
-            max_buffer_size=self.max_buffer_size)
+            max_buffer_size=self.max_buffer_size,
+            source_ip=host, source_port=port)
 
         if not timeout_reason or timeout_reason.get('reason'):
             s.set_nodelay(True)
@@ -139,7 +246,7 @@ class HTTPAdapter(BaseAdapter):
                 self.io_loop.time() + connect_timeout,
                 stack_context.wrap(functools.partial(self._on_timeout, timeout_reason)))
 
-        connection.write_headers(request.start_line, request.headers)
+        connection.write_headers(start_line, request.headers)
         if request.body is not None:
             connection.write(request.body) #TODO: partial sending
         connection.finish()
