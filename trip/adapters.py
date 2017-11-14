@@ -6,6 +6,7 @@ This module contains the transport adapters that Trip uses to define
 and maintain connections.
 
 The following is the connections between Trip and Tornado:
+    tcpclient.TCPClient                     -> TCPClient
     simple_httpclient.SimpleAsyncHTTPClient -> HTTPAdapter
     simple_httpclient._HTTPConnection       -> HTTPAdapter
     http1connection.HTTP1Connection         -> HTTPConnection
@@ -32,12 +33,14 @@ from tornado.netutil import Resolver, OverrideResolver
 from tornado.tcpclient import TCPClient as _TCPClient
 
 from requests.adapters import BaseAdapter
-from requests.compat import urlsplit
+from requests.compat import urlsplit, urlparse
 from requests.exceptions import Timeout, HTTPError
-from requests.utils import DEFAULT_CA_BUNDLE_PATH, select_proxy
+from requests.utils import (
+    DEFAULT_CA_BUNDLE_PATH,
+    prepend_scheme_if_needed, select_proxy)
 
 from .compat import BadStatusLine, LineTooLong
-from .utils import get_host_and_port
+from .utils import get_host_and_port, get_proxy_headers
 
 
 class TCPClient(_TCPClient):
@@ -69,8 +72,12 @@ class TCPClient(_TCPClient):
             if source_port_bind or source_ip_bind:
                 @gen.coroutine
                 def _(addr):
-                    r = yield stream.connect((source_ip_bind, source_port_bind))
-                    yield self._connect_tunnel(stream, addr, {})
+                    proxy_headers = get_proxy_headers(source_ip_bind)
+                    parsed = urlparse(source_ip_bind)
+                    scheme, host, port = parsed.scheme, parsed.hostname, source_port_bind
+                    r = yield stream.connect((host, port))
+                    if scheme == 'https':
+                        yield self._connect_tunnel(stream, addr, proxy_headers)
                     raise gen.Return(r)
                 return _(addr)
             else:
@@ -209,10 +216,14 @@ class HTTPAdapter(BaseAdapter):
                 stack_context.wrap(functools.partial(self._on_timeout, timeout_reason)))
 
         proxy = select_proxy(request.url, proxies)
+        proxy = prepend_scheme_if_needed(proxy, 'http')
+        headers = request.headers.copy()
         if proxy:
-            host, port = (proxy.split(':') + [80])[:2]
-            port = int(port)
+            parsed = urlparse(proxy)
+            scheme, host, port = parsed.scheme, proxy, parsed.port
+            port = port or (443 if scheme == 'https' else 80)
             start_line = RequestStartLine(request.method, request.url, '')
+            headers.update(get_proxy_headers(proxy))
         else:
             host, port = None, None
             start_line = request.start_line
@@ -246,7 +257,7 @@ class HTTPAdapter(BaseAdapter):
                 self.io_loop.time() + connect_timeout,
                 stack_context.wrap(functools.partial(self._on_timeout, timeout_reason)))
 
-        connection.write_headers(start_line, request.headers)
+        connection.write_headers(start_line, headers)
         if request.body is not None:
             connection.write(request.body) #TODO: partial sending
         connection.finish()

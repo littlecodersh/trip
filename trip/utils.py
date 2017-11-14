@@ -1,7 +1,9 @@
 import codecs
 
+from requests.auth import _basic_auth_str
 from requests.compat import urlsplit
 from requests.structures import CaseInsensitiveDict
+from requests.utils import get_auth_from_url
 
 from tornado.concurrent import Future
 from tornado.httputil import split_host_and_port
@@ -67,3 +69,21 @@ def get_host_and_port(url):
     if port is None:
         port = 443 if parsed.scheme == 'https' else 80
     return (host, port)
+
+def get_proxy_headers(proxy):
+    """Returns a dictionary of the headers to add to any request sent
+    through a proxy. This works with urllib3 magic to ensure that they are
+    correctly sent to the proxy, rather than in a tunnelled request if
+    CONNECT is being used.
+
+    :param proxies: The url of the proxy being used for this request.
+    :rtype: dict
+    """
+    headers = {}
+    username, password = get_auth_from_url(proxy)
+
+    if username:
+        headers['Proxy-Authorization'] = _basic_auth_str(username,
+                                                         password)
+
+    return headers
