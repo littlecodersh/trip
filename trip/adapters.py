@@ -1,6 +1,6 @@
 """
 trip.adapters
-~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~
 
 This module contains the transport adapters that Trip uses to define
 and maintain connections.
@@ -30,58 +30,62 @@ from tornado.iostream import StreamClosedError, IOStream
 from tornado.log import app_log, gen_log
 from tornado.platform.auto import set_close_exec
 from tornado.netutil import Resolver, OverrideResolver
-from tornado.tcpclient import TCPClient as _TCPClient
+from tornado.tcpclient import TCPClient as _TCPClient, _Connector
 
 from requests.adapters import BaseAdapter
 from requests.compat import urlsplit, urlparse
 from requests.exceptions import Timeout, HTTPError
 from requests.utils import (
     DEFAULT_CA_BUNDLE_PATH,
-    prepend_scheme_if_needed, select_proxy)
+    prepend_scheme_if_needed, 
+    get_auth_from_url, select_proxy)
 
 from .compat import BadStatusLine, LineTooLong
+from .contrib.socks import SockIOStream
 from .utils import get_host_and_port, get_proxy_headers
 
 
 class TCPClient(_TCPClient):
     """ override tcpclient to enable https proxy. """
+
     def _create_stream(self, max_buffer_size, af, addr, source_ip=None,
-               source_port=None):
+            source_port=None):
         # Always connect in plaintext; we'll convert to ssl if necessary
         # after one connection has completed.
         source_port_bind = source_port if isinstance(source_port, int) else 0
         source_ip_bind = source_ip
-        if source_port_bind and not source_ip:
-            # User required a specific port, but did not specify
-            # a certain source IP, will bind to the default loopback.
-            source_ip_bind = '::1' if af == socket.AF_INET6 else '127.0.0.1'
-            # Trying to use the same address family as the requested af socket:
-            # - 127.0.0.1 for IPv4
-            # - ::1 for IPv6
+
         socket_obj = socket.socket(af)
         set_close_exec(socket_obj.fileno())
         try:
             stream = IOStream(socket_obj,
                               io_loop=self.io_loop,
                               max_buffer_size=max_buffer_size)
-        except socket.error as e:
-            fu = Future()
-            fu.set_exception(e)
-            return fu
-        else:
+
+            # connect proxy
             if source_port_bind or source_ip_bind:
                 @gen.coroutine
                 def _(addr):
                     proxy_headers = get_proxy_headers(source_ip_bind)
                     parsed = urlparse(source_ip_bind)
                     scheme, host, port = parsed.scheme, parsed.hostname, source_port_bind
-                    r = yield stream.connect((host, port))
-                    if scheme == 'https':
-                        yield self._connect_tunnel(stream, addr, proxy_headers)
-                    raise gen.Return(r)
+                    if 'socks' in scheme:
+                        r = yield self._negotiate_socks(addr, (source_ip_bind, source_port_bind))
+                        raise gen.Return(r)
+                    elif scheme in ('http', 'https'):
+                        r = yield stream.connect((host, port))
+                        if scheme == 'https':
+                            yield self._connect_tunnel(stream, addr, proxy_headers)
+                        raise gen.Return(r)
+                    else:
+                        raise AttributeError('Unknown scheme: %s' % scheme)
                 return _(addr)
             else:
                 return stream.connect(addr)
+        except socket.error as e:
+            fu = Future()
+            fu.set_exception(e)
+            return fu
 
     @gen.coroutine
     def _connect_tunnel(self, sock, addr, headers):
@@ -136,6 +140,25 @@ class TCPClient(_TCPClient):
                 break
             if line == '\r\n':
                 break
+
+    def _negotiate_socks(self, addr, proxy_addr):
+        parsed = urlparse(proxy_addr[0])
+
+        if parsed.scheme == 'socks5':
+            socks_version, rdns = 2, False
+        elif parsed.scheme == 'socks5h':
+            socks_version, rdns = 2, True
+        elif parsed.scheme == 'socks4':
+            socks_version, rdns = 1, False
+        elif parsed.scheme == 'socks4a':
+            socks_version, rdns = 1, True
+        else:
+            raise ValueError(
+                'Unable to determine SOCKS version from %s' % addr[0])
+        username, password = get_auth_from_url(addr[0])
+        stream = SockIOStream((
+            socks_version, rdns, parsed.hostname, proxy_addr[1], username, password))
+        return stream.connect(*addr)
 
 
 class HTTPAdapter(BaseAdapter):
