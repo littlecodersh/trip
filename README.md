@@ -155,7 +155,7 @@ trip.run(main)
 [pypi]: https://pypi.python.org/pypi/trip
 [pypi-image]: https://img.shields.io/pypi/v/trip.svg
 [chinese]: https://github.com/littlecodersh/trip/blob/master/README_CN.md
-[chinese-image]: https://img.shields.io/badge/中文---%3E-yellow.svg
+[chinese-image]: https://img.shields.io/badge/README-切换语言-yellow.svg
 [thanks]: https://saythanks.io/to/littlecodersh
 [thanks-image]: https://img.shields.io/badge/Say%20Thanks-!-1EAEDB.svg
 [demo]: https://gist.github.com/littlecodersh/6803d2c3382de9a7793a0189db72f538

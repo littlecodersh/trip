@@ -1,6 +1,6 @@
 from tornado import concurrent, gen, ioloop
 from tornado.concurrent import Future
-from tornado.gen import coroutine, Return
+from tornado.gen import coroutine, Return, sleep
 from tornado.ioloop import IOLoop
 
 from .api import (

@@ -150,7 +150,7 @@ trip.run(main)
 [pypi]: https://pypi.python.org/pypi/trip
 [pypi-image]: https://img.shields.io/pypi/v/trip.svg
 [english]: https://github.com/littlecodersh/trip/blob/master/README.md
-[english-image]: https://img.shields.io/badge/english---%3E-yellow.svg
+[english-image]: https://img.shields.io/badge/README-English-yellow.svg
 [thanks]: https://saythanks.io/to/littlecodersh
 [thanks-image]: https://img.shields.io/badge/Say%20Thanks-!-1EAEDB.svg
 [demo]: https://gist.github.com/littlecodersh/6803d2c3382de9a7793a0189db72f538

@@ -238,6 +238,9 @@ class HTTPAdapter(BaseAdapter):
 
 class HTTPConnection(object):
     """Non-blocking HTTP client with no external dependencies.
+
+    One HTTPConnection sticks to one request. Use HTTP1Connection
+    inside for HTTP1.1 protocol.
     """
     def __init__(self, request, final_callback,
             tcp_client, max_buffer_size, 
@@ -253,19 +256,6 @@ class HTTPConnection(object):
 
     def send(self, stream=False, timeout=None, verify=True,
              cert=None, proxies=None):
-        """Sends Request object. Returns Response object.
-
-        :param request: The :class:`PreparedRequest <PreparedRequest>` being sent.
-        :param stream: (optional) Whether to stream the request content.
-        :param timeout: (optional) How long to wait for the server to send
-            data before giving up, as a float, or a :ref:`(connect timeout,
-            read timeout) <timeouts>` tuple.
-        :type timeout: float or tuple
-        :param verify: (optional) Whether to verify SSL certificates.
-        :param cert: (optional) Any user-provided SSL certificate to be trusted.
-        :param proxies: (optional) The proxies dictionary to apply to the request.
-        :rtype: trip.adapters.MessageDelegate
-        """
         request = self.request
         if isinstance(timeout, tuple):
             try:
@@ -287,11 +277,11 @@ class HTTPConnection(object):
                     stack_context.wrap(functools.partial(
                         self._on_timeout, 'while connecting')))
 
+        # set proxy related info
         proxy = select_proxy(request.url, proxies)
-        if proxy:
-            proxy = prepend_scheme_if_needed(proxy, 'http')
         self.headers = request.headers.copy()
         if proxy:
+            proxy = prepend_scheme_if_needed(proxy, 'http')
             parsed = urlparse(proxy)
             scheme, host, port = parsed.scheme, proxy, parsed.port
             port = port or (443 if scheme == 'https' else 80)
@@ -342,7 +332,8 @@ class HTTPConnection(object):
 
     def _on_headers_received(self, connection, resp, status):
         if not self.stream_body and status:
-            connection.read_body(resp)
+            connection.read_body(resp, callback=self._remove_timeout)
+        self._remove_timeout()
 
     def _get_ssl_options(self, req, verify, cert):
         if urlsplit(req.url).scheme == "https":
@@ -425,7 +416,7 @@ class HTTPConnection(object):
         if self.final_callback is not None:
             raise Timeout(599, error_message)
 
-    def _remove_timeout(self):
+    def _remove_timeout(self, *args, **kwargs):
         if self._timeout is not None:
             self.io_loop.remove_timeout(self._timeout)
             self._timeout = None
@@ -444,11 +435,11 @@ class HTTPConnection(object):
                     value = HTTPError(599, 'Stream closed')
                 else:
                     value = value.real_error
-            if isinstance(value, Timeout):
-                m = value
-            else:
                 m = MessageDelegate(self.request, None, None)
                 m.code, m.reason = 599, value
+            else:
+                m = value
+
             self._run_callback(m)
 
             if hasattr(self, 'stream'):
@@ -480,17 +471,7 @@ class HTTP1Connection(_HTTP1Connection):
             header_future = self.stream.read_until_regex(
                 b"\r?\n\r?\n",
                 max_bytes=self.params.max_header_size)
-            if self.params.header_timeout is None:
-                header_data = yield header_future
-            else:
-                try:
-                    header_data = yield gen.with_timeout(
-                        self.stream.io_loop.time() + self.params.header_timeout,
-                        header_future,
-                        quiet_exceptions=StreamClosedError)
-                except gen.TimeoutError:
-                    self.close()
-                    raise gen.Return(False)
+            header_data = yield header_future
             start_line, headers = self._parse_headers(header_data)
 
             start_line = parse_response_start_line(start_line)
@@ -554,19 +535,7 @@ class HTTP1Connection(_HTTP1Connection):
                 body_future = self._read_body(
                     _delegate.code, _delegate.headers, delegate)
                 if body_future is not None:
-                    if self._body_timeout is None:
-                        yield body_future
-                    else:
-                        try:
-                            yield gen.with_timeout(
-                                self.stream.io_loop.time() + self._body_timeout,
-                                body_future,
-                                quiet_exceptions=StreamClosedError)
-                        except gen.TimeoutError:
-                            gen_log.info("Timeout reading body from %s",
-                                         self.context)
-                            self.stream.close()
-                            raise gen.Return(False)
+                    yield body_future
 
                 self._read_finished = True
                 need_delegate_close = False
@@ -605,19 +574,7 @@ class HTTP1Connection(_HTTP1Connection):
             try:
                 body_future = self._read_stream_body(chunk_size, delegate)
                 if body_future is not None:
-                    if self._body_timeout is None:
-                        remain_content = yield body_future
-                    else:
-                        try:
-                            remain_content = yield gen.with_timeout(
-                                self.stream.io_loop.time() + self._body_timeout,
-                                body_future,
-                                quiet_exceptions=StreamClosedError)
-                        except gen.TimeoutError:
-                            gen_log.info("Timeout reading body from %s",
-                                         self.context)
-                            self.stream.close()
-                            remain_content = False
+                    remain_content = yield body_future
                 need_delegate_close = False
 
                 if not remain_content:
