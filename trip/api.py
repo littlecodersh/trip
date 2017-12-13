@@ -5,6 +5,7 @@ trip.api
 This module implements the Trip API.
 
 """
+from tornado.gen import coroutine
 from tornado.ioloop import IOLoop
 
 from . import sessions
@@ -150,4 +151,6 @@ def delete(url, **kwargs):
 
 
 def run(fn):
+    if not getattr(fn, '__tornado_coroutine__', False):
+        fn = coroutine(fn)
     IOLoop.current().run_sync(fn)

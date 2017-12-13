@@ -10,4 +10,7 @@ class TripException(RequestException, HTTPError):
 
     def __init__(self, *args, **kwargs):
         """Initialize TripException with `request` and `response` objects."""
-        RequestException.__init__(*args, **kwargs)
+        RequestException.__init__(self, *args, **kwargs)
+
+class Timeout(TripException):
+    """The request timed out."""

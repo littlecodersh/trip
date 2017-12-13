@@ -372,15 +372,16 @@ class Response(_Response):
                     while not future.done():
                         yield future
             else:
-                self.raw.body.seek(0)
-                while True:
-                    chunk = self.raw.body.read(chunk_size)
-                    if decode:
-                        chunk = decoder.decode(chunk)
-                    if not chunk:
-                        break
-                    else:
-                        yield chunk
+                if self.raw.body:
+                    self.raw.body.seek(0)
+                    while True:
+                        chunk = self.raw.body.read(chunk_size)
+                        if decode:
+                            chunk = decoder.decode(chunk)
+                        if not chunk:
+                            break
+                        else:
+                            yield chunk
 
             self._content_consumed = True
 

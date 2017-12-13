@@ -8,8 +8,8 @@ and maintain connections.
 The following is the connections between Trip and Tornado:
     tcpclient.TCPClient                     -> TCPClient
     simple_httpclient.SimpleAsyncHTTPClient -> HTTPAdapter
-    simple_httpclient._HTTPConnection       -> HTTPAdapter
-    http1connection.HTTP1Connection         -> HTTPConnection
+    simple_httpclient._HTTPConnection       -> HTTPConnection
+    http1connection.HTTP1Connection         -> HTTP1Connection
     
 """
 
@@ -20,7 +20,8 @@ from weakref import ref
 from tornado import gen, stack_context
 from tornado.concurrent import Future
 from tornado.http1connection import (
-    HTTP1Connection, HTTP1ConnectionParameters,
+    HTTP1Connection as _HTTP1Connection,
+    HTTP1ConnectionParameters,
     _ExceptionLoggingContext, _GzipMessageDelegate)
 from tornado.httputil import (
     parse_response_start_line, 
@@ -34,7 +35,7 @@ from tornado.tcpclient import TCPClient as _TCPClient, _Connector
 
 from requests.adapters import BaseAdapter
 from requests.compat import urlsplit, urlparse
-from requests.exceptions import Timeout, HTTPError
+from requests.exceptions import HTTPError
 from requests.utils import (
     DEFAULT_CA_BUNDLE_PATH,
     prepend_scheme_if_needed, 
@@ -42,6 +43,7 @@ from requests.utils import (
 
 from .compat import BadStatusLine, LineTooLong
 from .contrib.socks import SockIOStream
+from .exceptions import Timeout
 from .utils import get_host_and_port, get_proxy_headers
 
 
@@ -203,7 +205,6 @@ class HTTPAdapter(BaseAdapter):
 
         self.tcp_client = TCPClient(resolver=self.resolver)
 
-    @gen.coroutine
     def send(self, request, stream=False, timeout=None, verify=True,
              cert=None, proxies=None):
         """Sends Request object. Returns Response object.
@@ -219,9 +220,56 @@ class HTTPAdapter(BaseAdapter):
         :param proxies: (optional) The proxies dictionary to apply to the request.
         :rtype: trip.adapters.MessageDelegate
         """
+        future = Future()
+        def final_callback(response):
+            if isinstance(response, Exception):
+                future.set_exception(response)
+            else:
+                future.set_result(response)
+        HTTPConnection(request, final_callback, self.tcp_client,
+            self.max_buffer_size, self.max_header_size, self.max_body_size
+            ).send(stream, timeout, verify, cert, proxies)
+        return future
+
+    def close(self):
+        """Cleans up adapter specific items."""
+        pass
+
+
+class HTTPConnection(object):
+    """Non-blocking HTTP client with no external dependencies.
+    """
+    def __init__(self, request, final_callback,
+            tcp_client, max_buffer_size, 
+            max_header_size, max_body_size):
+        self.io_loop = IOLoop.current()
+        self.request = request
+        self.final_callback = final_callback
+        self.max_buffer_size = max_buffer_size
+        self.tcp_client = tcp_client
+        self.max_header_size = max_header_size
+        self.max_body_size = max_body_size
+        self._timeout = None
+
+    def send(self, stream=False, timeout=None, verify=True,
+             cert=None, proxies=None):
+        """Sends Request object. Returns Response object.
+
+        :param request: The :class:`PreparedRequest <PreparedRequest>` being sent.
+        :param stream: (optional) Whether to stream the request content.
+        :param timeout: (optional) How long to wait for the server to send
+            data before giving up, as a float, or a :ref:`(connect timeout,
+            read timeout) <timeouts>` tuple.
+        :type timeout: float or tuple
+        :param verify: (optional) Whether to verify SSL certificates.
+        :param cert: (optional) Any user-provided SSL certificate to be trusted.
+        :param proxies: (optional) The proxies dictionary to apply to the request.
+        :rtype: trip.adapters.MessageDelegate
+        """
+        request = self.request
         if isinstance(timeout, tuple):
             try:
-                connect_timeout, read_timeout = timeout
+                connect_timeout, self.read_timeout = timeout
             except ValueError as e:
                 # this may raise a string formatting error.
                 err = ("Invalid timeout {0}. Pass a (connect, read) "
@@ -229,83 +277,72 @@ class HTTPAdapter(BaseAdapter):
                        "both timeouts to the same value".format(timeout))
                 raise ValueError(err)
         else:
-            connect_timeout, read_timeout = timeout, timeout
+            connect_timeout, self.read_timeout = timeout, timeout
+        self.stream_body = stream
 
-        timeout_reason = {}
-        if connect_timeout:
-            timeout_reason['reason'] = 'while connecting'
-            self.io_loop.add_timeout(
-                self.io_loop.time() + connect_timeout,
-                stack_context.wrap(functools.partial(self._on_timeout, timeout_reason)))
+        # set connect timeout
+        with stack_context.ExceptionStackContext(self._handle_exception):
+            if connect_timeout:
+                self._timeout = self.io_loop.call_later(connect_timeout,
+                    stack_context.wrap(functools.partial(
+                        self._on_timeout, 'while connecting')))
 
         proxy = select_proxy(request.url, proxies)
-        proxy = prepend_scheme_if_needed(proxy, 'http')
-        headers = request.headers.copy()
+        if proxy:
+            proxy = prepend_scheme_if_needed(proxy, 'http')
+        self.headers = request.headers.copy()
         if proxy:
             parsed = urlparse(proxy)
             scheme, host, port = parsed.scheme, proxy, parsed.port
             port = port or (443 if scheme == 'https' else 80)
-            start_line = RequestStartLine(request.method, request.url, '')
-            headers.update(get_proxy_headers(proxy))
+            self.start_line = RequestStartLine(request.method, request.url, '')
+            self.headers.update(get_proxy_headers(proxy))
         else:
             host, port = None, None
-            start_line = request.start_line
+            self.start_line = request.start_line
 
-        s = yield self.tcp_client.connect(
-            request.host, request.port,
-            af=request.af,
-            ssl_options=self._get_ssl_options(request, verify, cert),
-            max_buffer_size=self.max_buffer_size,
-            source_ip=host, source_port=port)
+        with stack_context.ExceptionStackContext(self._handle_exception):
+            self.tcp_client.connect(
+                request.host, request.port,
+                af=request.af,
+                ssl_options=self._get_ssl_options(request, verify, cert),
+                max_buffer_size=self.max_buffer_size,
+                source_ip=host, source_port=port,
+                callback=self._on_connect)
 
-        if not timeout_reason or timeout_reason.get('reason'):
-            s.set_nodelay(True)
-            timeout_reason.clear()
-        else:
-            raise gen.Return(Timeout(
-                timeout_reason.get('error', 'unknown'),
-                request=request))
+    def _on_connect(self, s):
+        self.stream = s
+        if self.final_callback is None:
+            s.close()
+            return
 
-        connection = HTTPConnection(
+        s.set_nodelay(True)
+
+        connection = HTTP1Connection(
             s,
             HTTP1ConnectionParameters(
                 no_keep_alive=True,
                 max_header_size=self.max_header_size,
                 max_body_size=self.max_body_size,
-                decompress=request.decompress))
+                decompress=self.request.decompress))
 
-        if read_timeout:
-            timeout_reason['reason'] = 'during request'
-            self.io_loop.add_timeout(
-                self.io_loop.time() + connect_timeout,
-                stack_context.wrap(functools.partial(self._on_timeout, timeout_reason)))
+        if self.read_timeout:
+            self._timeout = self.io_loop.call_later(self.read_timeout,
+                stack_context.wrap(functools.partial(
+                    self._on_timeout, 'during request')))
 
-        connection.write_headers(start_line, headers)
-        if request.body is not None:
-            connection.write(request.body) #TODO: partial sending
+        connection.write_headers(self.start_line, self.headers)
+        if self.request.body is not None:
+            connection.write(self.request.body) #TODO: partial sending
         connection.finish()
 
-        future = Future()
-        def handle_response(response):
-            if isinstance(response, Exception):
-                future.set_exception(response)
-            else:
-                future.set_result(response)
-        resp = MessageDelegate(request, connection, handle_response, stream)
+        resp = MessageDelegate(self.request, connection, self._run_callback, self.stream_body)
+        connection.read_headers(resp, callback=functools.partial(
+            self._on_headers_received, connection, resp))
 
-        headers_received = yield connection.read_headers(resp)
-
-        if not stream and headers_received:
-            yield connection.read_body(resp)
-
-        if not timeout_reason or timeout_reason.get('reason'):
-            timeout_reason.clear()
-            resp = yield future
-            raise gen.Return(resp)
-        else:
-            raise gen.Return(Timeout(
-                timeout_reason.get('error', 'unknown'),
-                request=request))
+    def _on_headers_received(self, connection, resp, status):
+        if not self.stream_body and status:
+            connection.read_body(resp)
 
     def _get_ssl_options(self, req, verify, cert):
         if urlsplit(req.url).scheme == "https":
@@ -377,28 +414,56 @@ class HTTPAdapter(BaseAdapter):
         return None
 
     def _on_timeout(self, info=None):
-        """Timeout callback.
+        """Timeout callback of _HTTPConnection instance.
 
         Raise a timeout HTTPError when a timeout occurs.
 
         :info string key: More detailed timeout information.
         """
-        if info:
-            reason = info.get('reason', 'unknown')
-            info.clear()
-            info['error'] = 'Timeout {0}'.format(reason)
+        self._timeout = None
+        error_message = 'Timeout {0}'.format(info) if info else 'unknown'
+        if self.final_callback is not None:
+            raise Timeout(599, error_message)
 
-    def close(self):
-        """Cleans up adapter specific items."""
-        pass
+    def _remove_timeout(self):
+        if self._timeout is not None:
+            self.io_loop.remove_timeout(self._timeout)
+            self._timeout = None
+    
+    def _run_callback(self, response):
+        if self.final_callback is not None:
+            final_callback = self.final_callback
+            self.final_callback = None
+            self.io_loop.add_callback(final_callback, response)
+
+    def _handle_exception(self, type_, value, tb):
+        if self.final_callback:
+            self._remove_timeout()
+            if isinstance(value, StreamClosedError):
+                if value.real_error is None:
+                    value = HTTPError(599, 'Stream closed')
+                else:
+                    value = value.real_error
+            if isinstance(value, Timeout):
+                m = value
+            else:
+                m = MessageDelegate(self.request, None, None)
+                m.code, m.reason = 599, value
+            self._run_callback(m)
+
+            if hasattr(self, 'stream'):
+                self.stream.close()
+            return True
+        else:
+            return isinstance(value, StreamClosedError)
 
 
-class HTTPConnection(HTTP1Connection):
+class HTTP1Connection(_HTTP1Connection):
     """Implements the HTTP/1.x protocol.
     """
 
     def __init__(self, stream, params=None):
-        HTTP1Connection.__init__(self, stream, True, params)
+        _HTTP1Connection.__init__(self, stream, True, params)
 
     def _parse_delegate(self, delegate):
         if not hasattr(delegate, '_delegate'):
@@ -660,9 +725,10 @@ class MessageDelegate(HTTPMessageDelegate):
         If ``headers_received`` is called, either ``finish`` or
         ``on_connection_close`` will be called, but not both.
         """
-        message = "Connection closed"
-        error = error or HTTPError(599, message)
-        self._run_callback(error)
+        error = error or HTTPError(599, 'Connection closed')
+        self.reason = (self.reason, self.code, error)
+        self.code = 599
+        self._run_callback(self)
 
     def _run_callback(self, response):
         if self.final_callback is not None:
