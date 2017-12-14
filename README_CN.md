@@ -14,7 +14,6 @@ Python的协程可以这么简单（兼容Python 2.7-3.7）：
 ```python
 import trip
 
-@trip.coroutine
 def main():
     r = yield trip.get('https://httpbin.org/get', auth=('user', 'pass'))
     print(r.content)
@@ -76,7 +75,6 @@ trip.run(main)
 ```python
 import trip
 
-@trip.coroutine
 def main():
     s = trip.Session()
     r = yield s.get(
@@ -94,7 +92,6 @@ trip.run(main)
 ```python
 import trip
 
-@trip.coroutine
 def main():
     def print_url(r, *args, **kwargs):
         print(r.url)
@@ -113,7 +110,6 @@ trip.run(main)
 ```python
 import trip
 
-@trip.coroutine
 def main():
     r = yield trip.get('http://github.com', timeout=0.001)
     print(r)
@@ -131,7 +127,6 @@ proxies = {
     'https': '127.0.0.1:8081',
 }
 
-@trip.coroutine
 def main():
     r = yield trip.get('https://httpbin.org/get', proxies=proxies)
     print(r.content)
