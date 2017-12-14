@@ -180,6 +180,11 @@ class SockIOStream(IOStream):
         port = struct.unpack(">H", data)[0]
         raise gen.Return((addr, port))
 
+    def close(self, exc_info=False):
+        self.resolver.close()
+        self.resolver = None
+        super(IOStream, self).close(exc_info)
+
 
 class Resolver(_Resolver):
     @run_on_executor

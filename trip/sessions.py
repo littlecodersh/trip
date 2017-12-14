@@ -31,6 +31,7 @@ from urllib3._collections import HTTPHeaderDict
 
 from tornado import gen
 from tornado.concurrent import Future
+from tornado.ioloop import IOLoop
 
 from .adapters import HTTPAdapter
 from .models import PreparedRequest, Request, Response
@@ -500,7 +501,14 @@ class Session(SessionRedirectMixin):
                 'cert': cert}
 
     def close(self):
-        pass
+        self.adapter.close()
+
+    def mount(self, prefix, adapter=None):
+        adapter = adapter or prefix
+        if isinstance(adapter, HTTPAdapter):
+            self.adapter = adapter
+        else:
+            raise ValueError('Adapter must be a trip.adapters.HTTPAdapter')
 
 
 session = Session

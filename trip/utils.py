@@ -10,6 +10,7 @@ from tornado.httputil import split_host_and_port
 
 from .__version__ import __version__
 
+
 def default_user_agent(name="python-trip"):
     """
     Return a string representing the default user agent.
@@ -70,6 +71,7 @@ def get_host_and_port(url):
         port = 443 if parsed.scheme == 'https' else 80
     return (host, port)
 
+
 def get_proxy_headers(proxy):
     """Returns a dictionary of the headers to add to any request sent
     through a proxy. This works with urllib3 magic to ensure that they are
@@ -87,3 +89,24 @@ def get_proxy_headers(proxy):
                                                          password)
 
     return headers
+
+
+def parse_timeout(timeout):
+    """Returns a tuple of timeout consist of connect timeout and 
+    read timeout.
+
+    :param proxies: float or tuple
+    :rtype: tuple
+    """
+    if isinstance(timeout, tuple):
+        try:
+            c, r = timeout
+        except ValueError as e:
+            # this may raise a string formatting error.
+            err = ("Invalid timeout {0}. Pass a (connect, read) "
+                   "timeout tuple, or a single float to set "
+                   "both timeouts to the same value".format(timeout))
+            raise ValueError(err)
+    else:
+        c, r = timeout, timeout
+    return c, r

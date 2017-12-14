@@ -13,7 +13,7 @@ The following is the connections between Trip and Tornado:
     
 """
 
-import os, sys, functools, socket
+import os, sys, functools, socket, collections
 from io import BytesIO
 from weakref import ref
 
@@ -44,7 +44,7 @@ from requests.utils import (
 from .compat import BadStatusLine, LineTooLong
 from .contrib.socks import SockIOStream
 from .exceptions import Timeout
-from .utils import get_host_and_port, get_proxy_headers
+from .utils import get_host_and_port, get_proxy_headers, parse_timeout
 
 
 class TCPClient(_TCPClient):
@@ -188,11 +188,16 @@ class HTTPAdapter(BaseAdapter):
       >>> s.mount('http://', a)
     """
 
-    def __init__(self, io_loop=None, hostname_mapping=None,
-            max_buffer_size=104857600, max_header_size=None,
-            max_body_size=None):
+    def __init__(self, io_loop=None, max_clients=10,
+            hostname_mapping=None,
+            max_buffer_size=104857600,
+            max_header_size=None, max_body_size=None):
         super(HTTPAdapter, self).__init__()
 
+        self.max_clients = max_clients
+        self.queue = collections.deque()
+        self.active = {}
+        self.waiting = {}
         self.max_buffer_size = max_buffer_size
         self.max_header_size = max_header_size
         self.max_body_size = max_body_size
@@ -221,19 +226,75 @@ class HTTPAdapter(BaseAdapter):
         :rtype: trip.adapters.MessageDelegate
         """
         future = Future()
-        def final_callback(response):
+        def callback(response):
             if isinstance(response, Exception):
                 future.set_exception(response)
             else:
                 future.set_result(response)
-        HTTPConnection(request, final_callback, self.tcp_client,
+        key = object()
+        request = (request, stream, timeout, verify, cert, proxies)
+        self.queue.append((key, request, callback))
+        if not len(self.active) < self.max_clients:
+            timeout_handle = self.io_loop.add_timeout(
+                self.io_loop.time() + min(parse_timeout(timeout)),
+                functools.partial(self._on_timeout, key, 'in request queue'))
+        else:
+            timeout_handle = None
+        self.waiting[key] = (request, callback, timeout_handle)
+        self._process_queue()
+        if self.queue:
+            gen_log.debug('max_clients limit reached, request queued. '
+                          '%d active, %d queued requests.' % (
+                              len(self.active), len(self.queue)))
+        return future
+
+    def _process_queue(self):
+        with stack_context.NullContext():
+            while self.queue and len(self.active) < self.max_clients:
+                key, request, callback = self.queue.popleft()
+                if key not in self.waiting:
+                    continue
+                self._remove_timeout(key)
+                self.active[key] = (request, callback)
+                release_callback = functools.partial(self._release_fetch, key)
+                self._handle_request(request, release_callback, callback)
+
+    def _handle_request(self, request, release_callback, final_callback):
+        request, stream, timeout, verify, cert, proxies = request
+        HTTPConnection(request, release_callback, final_callback, self.tcp_client,
             self.max_buffer_size, self.max_header_size, self.max_body_size
             ).send(stream, timeout, verify, cert, proxies)
-        return future
+
+    def _release_fetch(self, key):
+        del self.active[key]
+        self._process_queue()
+
+    def _remove_timeout(self, key):
+        if key in self.waiting:
+            request, callback, timeout_handle = self.waiting[key]
+            if timeout_handle is not None:
+                self.io_loop.remove_timeout(timeout_handle)
+            del self.waiting[key]
+
+    def _on_timeout(self, key, info=None):
+        """Timeout callback of request.
+
+        Construct a timeout HTTPResponse when a timeout occurs.
+
+        :arg object key: A simple object to mark the request.
+        :info string key: More detailed timeout information.
+        """
+        request, callback, timeout_handle = self.waiting[key]
+        self.queue.remove((key, request, callback))
+
+        error_message = 'Timeout {0}'.format(info) if info else 'Timeout'
+        self.io_loop.add_callback(callback, Timeout(599, err_message))
+        del self.waiting[key]
 
     def close(self):
         """Cleans up adapter specific items."""
-        pass
+        self.resolver.close()
+        self.tcp_client.close()
 
 
 class HTTPConnection(object):
@@ -242,11 +303,13 @@ class HTTPConnection(object):
     One HTTPConnection sticks to one request. Use HTTP1Connection
     inside for HTTP1.1 protocol.
     """
-    def __init__(self, request, final_callback,
+    def __init__(self, request,
+            release_callback, final_callback, 
             tcp_client, max_buffer_size, 
             max_header_size, max_body_size):
         self.io_loop = IOLoop.current()
         self.request = request
+        self.release_callback = release_callback
         self.final_callback = final_callback
         self.max_buffer_size = max_buffer_size
         self.tcp_client = tcp_client
@@ -257,17 +320,7 @@ class HTTPConnection(object):
     def send(self, stream=False, timeout=None, verify=True,
              cert=None, proxies=None):
         request = self.request
-        if isinstance(timeout, tuple):
-            try:
-                connect_timeout, self.read_timeout = timeout
-            except ValueError as e:
-                # this may raise a string formatting error.
-                err = ("Invalid timeout {0}. Pass a (connect, read) "
-                       "timeout tuple, or a single float to set "
-                       "both timeouts to the same value".format(timeout))
-                raise ValueError(err)
-        else:
-            connect_timeout, self.read_timeout = timeout, timeout
+        connect_timeout, self.read_timeout = parse_timeout(timeout)
         self.stream_body = stream
 
         # set connect timeout
@@ -277,21 +330,20 @@ class HTTPConnection(object):
                     stack_context.wrap(functools.partial(
                         self._on_timeout, 'while connecting')))
 
-        # set proxy related info
-        proxy = select_proxy(request.url, proxies)
-        self.headers = request.headers.copy()
-        if proxy:
-            proxy = prepend_scheme_if_needed(proxy, 'http')
-            parsed = urlparse(proxy)
-            scheme, host, port = parsed.scheme, proxy, parsed.port
-            port = port or (443 if scheme == 'https' else 80)
-            self.start_line = RequestStartLine(request.method, request.url, '')
-            self.headers.update(get_proxy_headers(proxy))
-        else:
-            host, port = None, None
-            self.start_line = request.start_line
+            # set proxy related info
+            proxy = select_proxy(request.url, proxies)
+            self.headers = request.headers.copy()
+            if proxy:
+                proxy = prepend_scheme_if_needed(proxy, 'http')
+                parsed = urlparse(proxy)
+                scheme, host, port = parsed.scheme, proxy, parsed.port
+                port = port or (443 if scheme == 'https' else 80)
+                self.start_line = RequestStartLine(request.method, request.url, '')
+                self.headers.update(get_proxy_headers(proxy))
+            else:
+                host, port = None, None
+                self.start_line = request.start_line
 
-        with stack_context.ExceptionStackContext(self._handle_exception):
             self.tcp_client.connect(
                 request.host, request.port,
                 af=request.af,
@@ -412,7 +464,7 @@ class HTTPConnection(object):
         :info string key: More detailed timeout information.
         """
         self._timeout = None
-        error_message = 'Timeout {0}'.format(info) if info else 'unknown'
+        error_message = 'Timeout {0}'.format(info) if info else 'Timeout'
         if self.final_callback is not None:
             raise Timeout(599, error_message)
 
@@ -421,7 +473,14 @@ class HTTPConnection(object):
             self.io_loop.remove_timeout(self._timeout)
             self._timeout = None
     
+    def _release(self):
+        if self.release_callback is not None:
+            release_callback = self.release_callback
+            self.release_callback = None
+            release_callback()
+
     def _run_callback(self, response):
+        self._release()
         if self.final_callback is not None:
             final_callback = self.final_callback
             self.final_callback = None
