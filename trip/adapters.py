@@ -357,6 +357,7 @@ class HTTPConnection(object):
         if self.final_callback is None:
             s.close()
             return
+        self._remove_timeout()
 
         s.set_nodelay(True)
 
@@ -383,9 +384,13 @@ class HTTPConnection(object):
             self._on_headers_received, connection, resp))
 
     def _on_headers_received(self, connection, resp, status):
+        def _finish_read(status=None):
+            self._remove_timeout()
+            resp.finish()
         if not self.stream_body and status:
-            connection.read_body(resp, callback=self._remove_timeout)
-        self._remove_timeout()
+            connection.read_body(resp, callback=_finish_read)
+        else:
+            _finish_read()
 
     def _get_ssl_options(self, req, verify, cert):
         if urlsplit(req.url).scheme == "https":
@@ -568,10 +573,6 @@ class HTTP1Connection(_HTTP1Connection):
                 # TODO: client delegates will get headers_received twice
                 # in the case of a 100-continue.  Document or change?
                 yield self.read_headers(delegate)
-
-            # return the response with no body set
-            with _ExceptionLoggingContext(app_log):
-                delegate.finish()
         except HTTPInputError as e:
             gen_log.info("Malformed HTTP message from %s: %s",
                          self.context, e)
@@ -764,3 +765,7 @@ class GzipMessageDelegate(_GzipMessageDelegate):
     @_delegate.setter
     def _delegate(self, value):
         self._delegate_ref = ref(value)
+
+    def on_connection_close(self, error=None):
+        if self._delegate:
+            return self._delegate.on_connection_close(error)
