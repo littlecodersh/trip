@@ -51,7 +51,7 @@ setup(
 
     install_requires=[
         'requests>=2.18.4',
-        'tornado>=4.5.2'
+        'tornado==4.5.3'
     ],
 
     # List additional groups of dependencies here
