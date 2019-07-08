@@ -351,22 +351,16 @@ class Response(_Response):
                     self.encoding)(errors='replace')
 
             if self.raw.stream:
-                content_remain = {'': ''}
-                while content_remain:
+                for chunk in self.raw.connection.iter_read_body(
+                        self.raw, chunk_size):
                     future = Future()
-
                     def callback(status):
-                        chunk = self.raw.body.getvalue()
-                        self.raw.body.truncate(0)
-                        self.raw.body.seek(0)
+                        # this will reraise exception
+                        v = chunk.result()
                         if decode:
-                            chunk = decoder.decode(chunk)
-                        if not status:
-                            content_remain.clear()
-                        future.set_result(chunk)
-
-                    self.raw.connection.read_stream_body(
-                        self.raw, chunk_size, callback=callback)
+                            v = decoder.decode(v)
+                        future.set_result(v)
+                    chunk.add_done_callback(callback)
                     yield future
 
                     while not future.done():

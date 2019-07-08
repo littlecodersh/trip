@@ -5,15 +5,27 @@ trip.adapters
 This module contains the transport adapters that Trip uses to define
 and maintain connections.
 
+Classes are rewrite for several reasons:
+ * add https proxy
+ * add stream reading
+
 The following is the connections between Trip and Tornado:
     tcpclient.TCPClient                     -> TCPClient
     simple_httpclient.SimpleAsyncHTTPClient -> HTTPAdapter
     simple_httpclient._HTTPConnection       -> HTTPConnection
     http1connection.HTTP1Connection         -> HTTP1Connection
-    
+
+The following is the relationship between classes:
+                1 every instance     1 every instance
+    sessions.Session ------> HTTPAdapter ------> TCPClient
+                             |             1 every request
+             1 every request `-> HTTPConnection ------> TCPClient
+                             |    flow control         data control
+             1 every request `-> MessageDelegate
+                                  data storage
 """
 
-import os, sys, functools, socket, collections
+import os, sys, functools, socket, collections, re
 from io import BytesIO
 from weakref import ref
 
@@ -384,6 +396,9 @@ class HTTPConnection(object):
             self._on_headers_received, connection, resp))
 
     def _on_headers_received(self, connection, resp, status):
+        """ If body is read in stream way,
+        return the response with empty body
+        """
         def _finish_read(status=None):
             self._remove_timeout()
             resp.finish()
@@ -521,6 +536,7 @@ class HTTP1Connection(_HTTP1Connection):
         _HTTP1Connection.__init__(self, stream, True, params)
 
     def _parse_delegate(self, delegate):
+        """ get message delegate with gzip support """
         if not hasattr(delegate, '_delegate'):
             if self.params.decompress:
                 delegate._delegate = GzipMessageDelegate(delegate, self.params.chunk_size)
@@ -572,7 +588,7 @@ class HTTP1Connection(_HTTP1Connection):
                         "Response code %d cannot have body" % code)
                 # TODO: client delegates will get headers_received twice
                 # in the case of a 100-continue.  Document or change?
-                yield self.read_headers(delegate)
+                yield self.read_headers(_delegate)
         except HTTPInputError as e:
             gen_log.info("Malformed HTTP message from %s: %s",
                          self.context, e)
@@ -624,58 +640,124 @@ class HTTP1Connection(_HTTP1Connection):
                 self._clear_callbacks()
         raise gen.Return(True)
 
-    @gen.coroutine
-    def read_stream_body(self, delegate, chunk_size=1, stream_callback=None):
+    def iter_read_body(self, delegate, chunk_size=1):
+        """ Return a Future generator """
         _delegate, delegate = self._parse_delegate(delegate)
-        remain_content = False
-        need_delegate_close = True
+        headers = _delegate.headers
 
-        if not _delegate.skip_body:
+        # Filter response with illegal headers, and set content-length
+        if "Content-Length" in headers:
+            if "Transfer-Encoding" in headers:
+                raise HTTPError(
+                    "Response with both Transfer-Encoding and Content-Length")
+            if "," in headers["Content-Length"]:
+                pieces = re.split(r',\s*', headers["Content-Length"])
+                if any(i != pieces[0] for i in pieces):
+                    raise HTTPError(
+                        "Multiple unequal Content-Lengths: %r" %
+                        headers["Content-Length"])
+                headers["Content-Length"] = pieces[0]
+
             try:
-                body_future = self._read_stream_body(chunk_size, delegate)
-                if body_future is not None:
-                    remain_content = yield body_future
-                need_delegate_close = False
+                content_length = int(headers["Content-Length"])
+            except ValueError:
+                # Handles non-integer Content-Length value.
+                raise HTTPError(
+                    "Only integer Content-Length is allowed: %s" % headers["Content-Length"])
 
-                if not remain_content:
-                    self._read_finished = True
-                    if (not self._finish_future.done() and
-                            self.stream is not None and
-                            not self.stream.closed()):
-                        self.stream.set_close_callback(self._on_connection_close)
-                        yield self._finish_future
-                    if self._disconnect_on_finish:
-                        self.close()
-            except HTTPInputError as e:
-                gen_log.info("Malformed HTTP message from %s: %s",
-                             self.context, e)
-                self.close()
-                remain_content = False
-            finally:
-                if need_delegate_close:
-                    with _ExceptionLoggingContext(app_log):
-                        delegate.on_connection_close(self.stream.error)
-                if not remain_content:
-                    self._clear_callbacks()
-        raise gen.Return(remain_content)
+            if content_length > self._max_body_size:
+                raise HTTPError("Content-Length too long")
+        else:
+            content_length = None
+
+        if _delegate.code == 204:
+            content_length = 0
+
+        if content_length is not None:
+            return self._get_body_generator(self._read_fixed_body,
+                    delegate, chunk_size, content_length=content_length)
+        elif headers.get("Transfer-Encoding", "").lower() == "chunked":
+            # TODO stream reading of chunked body
+            return (_ for _ in [self._read_chunked_body(delegate)])
+        elif self.is_client:
+            return self._get_body_generator(self._read_fixed_body, delegate, chunk_size)
+        else:
+            return (_ for _ in [])
+
+    def _get_body_generator(self, body_fn, delegate, chunk_size, content_length=None):
+        """ 
+        produce body generator
+        body_fn should be fn(chunk_size, delegate)
+        size of body generated can be different from chunk size
+        because of chunked http or gzip
+        """
+        def _():
+            last_future, remain_length = None, content_length
+            while remain_length is None or 0 < remain_length:
+
+                if remain_length is None:
+                    l = chunk_size
+                else:
+                    l = min(remain_length, chunk_size)
+
+                if last_future is None:
+                    last_future = body_fn(l, delegate)
+                    if remain_length is not None:
+                        remain_length -= l
+                    yield last_future
+                else:
+                    if last_future.done():
+                        try:
+                            r = last_future.result()
+                        except:
+                            r = ''
+                        if r:
+                            last_future = body_fn(l, delegate)
+                            if remain_length is not None:
+                                remain_length -= l
+                            yield last_future
+                        else:
+                            break
+                    else:
+                        yield last_future
+        return _()
 
     @gen.coroutine
-    def _read_stream_body(self, content_length, delegate):
-        while 0 < content_length:
-            try:
-                body = yield self.stream.read_bytes(
-                    min(self.params.chunk_size, content_length), partial=True)
-            except StreamClosedError:
-                # with partial stream will update close status after receiving
-                # the last chunk, so we catch StreamClosedError instead
-                raise gen.Return(False)
-            content_length -= len(body)
-            if not self._write_finished or self.is_client:
-                with _ExceptionLoggingContext(app_log):
-                    ret = delegate.data_received(body)
-                    if ret is not None:
-                        yield ret
-        raise gen.Return(True)
+    def _read_fixed_body(self, content_length, delegate):
+        """ everything is the same as _HTTP1Connection
+        except for returning the body
+        pls attention that content_length is NOT length
+        of the return value
+        """
+        yield _HTTP1Connection._read_fixed_body(self, content_length, delegate)
+
+        # return fixed body
+        _delegate = delegate._delegate
+        if _delegate.stream:
+            _delegate.body.seek(_delegate.cache_body_status['pointer'])
+            body = _delegate.body.read()
+            _delegate.cache_body_status['pointer'] += len(body)
+        else:
+            body = b''.join(_delegate.chunks)
+        raise gen.Return(body)
+
+    @gen.coroutine
+    def _read_chunked_body(self, delegate):
+        """ everything is the same as _HTTP1Connection
+        except for returning the body
+        """
+        # TODO: "chunk extensions" http://tools.ietf.org/html/rfc2616#section-3.6.1
+        yield _HTTP1Connection._read_chunked_body(self, delegate)
+
+        # return fixed body
+        _delegate = delegate._delegate
+        if _delegate.stream:
+            _delegate.body.seek(_delegate.cache_body_status['pointer'])
+            body = _delegate.body.read()
+            _delegate.cache_body_status['pointer'] += len(body)
+        else:
+            body = b''.join(_delegate.chunks)
+        raise gen.Return(body)
 
 
 class MessageDelegate(HTTPMessageDelegate):
@@ -688,6 +770,7 @@ class MessageDelegate(HTTPMessageDelegate):
         self.reason = None
         self.headers = None
         self.body = None
+        self.cache_body_status = {'pointer': 0, 'length': 0}
         self.chunks = []
 
         self.request = request
@@ -723,6 +806,7 @@ class MessageDelegate(HTTPMessageDelegate):
         """
         if self.body:
             self.body.write(chunk)
+            self.cache_body_status['length'] += len(chunk)
         else:
             self.chunks.append(chunk)
 
